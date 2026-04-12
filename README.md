@@ -53,11 +53,23 @@ In Arduino IDE:
 
 ### 3. Upload
 
-Open `esp_mini_screen_colors/esp_mini_screen_colors.ino` in Arduino IDE and click **Upload**.
+Open any sketch `.ino` file from the sketches below in Arduino IDE and click **Upload**.
 
-## What the demo sketch does
+## Sketches
 
-Cycles through 8 colors (red, green, blue, yellow, cyan, magenta, white, orange) every 2 seconds, filling the entire screen and displaying the color name in the center.
+### esp_mini_screen_colors
+
+Display test sketch. Cycles through 8 colors (red, green, blue, yellow, cyan, magenta, white, orange) every 2 seconds, filling the entire screen and showing the color name in the center. Useful for verifying that the display and `User_Setup.h` are configured correctly.
+
+### esp_mini_screen_wifi
+
+WiFi provisioning sketch with a captive web portal. On first boot (or when the saved network is unavailable) the device starts as a WiFi access point:
+
+- **AP name:** `MiniScreen-Setup`
+- **AP password:** `12345678`
+- **Config URL:** `http://192.168.4.1`
+
+All connection details are shown on the TFT screen. After connecting to the AP and opening the URL in a browser you get a page that lists nearby WiFi networks — tap one, enter the password, and hit Connect. Credentials are saved to EEPROM so the device reconnects automatically on reboot. Once connected, the screen displays the assigned IP address, SSID, and signal strength.
 
 ## Credits
 
