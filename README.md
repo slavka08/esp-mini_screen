@@ -45,13 +45,32 @@ Find the library folder (typical paths):
 
 Copy `User_Setup.h` from this repo root and replace the original file.
 
-### 2. Select the board
+### 2. Generate local TLS certificate (camera sketch)
+
+`esp_mini_screen_camera` uses HTTPS for camera access and expects a local file `esp_mini_screen_camera/tls_local.h` with your private key.
+
+Generate it once after cloning:
+
+```bash
+bash setup.sh
+```
+
+This creates a unique self-signed cert/key pair for your machine. The generated file is ignored by Git.
+If you only want to regenerate TLS, run:
+
+```bash
+bash esp_mini_screen_camera/generate_tls_cert.sh
+```
+
+Template file: `esp_mini_screen_camera/tls_local.h.example`.
+
+### 3. Select the board
 
 In Arduino IDE:
 - **Tools -> Board** -> **Generic ESP8266 Module**
 - **Tools -> Port** -> select the CH340 serial port
 
-### 3. Upload
+### 4. Upload
 
 Open any sketch `.ino` file from the sketches below in Arduino IDE and click **Upload**.
 
@@ -70,6 +89,26 @@ WiFi provisioning sketch with a captive web portal. On first boot (or when the s
 - **Config URL:** `http://192.168.4.1`
 
 All connection details are shown on the TFT screen. After connecting to the AP and opening the URL in a browser you get a page that lists nearby WiFi networks — tap one, enter the password, and hit Connect. Credentials are saved to EEPROM so the device reconnects automatically on reboot. Once connected, the screen displays the assigned IP address, SSID, and signal strength.
+
+### esp_mini_screen_camera
+
+Streams your phone's camera to the TFT display over WiFi. Uses HTTPS with a self-signed certificate so the browser grants camera access. Includes built-in WiFi provisioning (same AP flow as above — credentials are shared via EEPROM).
+
+If compilation fails with `Missing tls_local.h`, run:
+```bash
+bash setup.sh
+```
+
+**How it works:**
+1. Device connects to WiFi (or starts AP for setup) and shows the HTTPS URL on screen
+2. Open `https://<device-ip>` in a phone browser and **accept the self-signed certificate warning**
+3. Select front/back camera, target FPS, resolution profile, and (optional) smoothing mode, then tap **Start**
+4. The browser captures video, downsamples it (30x30 / 40x40 / 48x48 / 60x60 / 80x80), converts to RGB565, and POSTs frames over HTTPS
+5. The ESP scales each pixel to fill 240x240 (8x / 6x / 5x / 4x / 3x)
+
+**Expected performance:** target up to 10 FPS in good WiFi conditions (HTTPS encryption still adds overhead on ESP8266). Lower resolutions are usually faster. For 60x60 mode, FPS is capped to 8; for 80x80 mode, FPS is capped to 5 for stability. Smoothing improves visual quality but can slightly reduce FPS (capped to 5 FPS when enabled), and is automatically limited to profiles up to 48x48 for stability on ESP8266 (disabled by default).
+
+**Browser note:** When you first open the URL, the browser will show a security warning because the certificate is self-signed. Tap **Advanced → Proceed** (Chrome) or **Accept the Risk** (Firefox) to continue. This is expected and safe on your local network.
 
 ## Credits
 

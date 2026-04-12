@@ -1,0 +1,15 @@
+#pragma once
+// Copy this file to tls_local.h and paste your own cert/key,
+// or run: bash esp_mini_screen_camera/generate_tls_cert.sh
+
+static const char serverCert[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+REPLACE_WITH_YOUR_CERT
+-----END CERTIFICATE-----
+)EOF";
+
+static const char serverKey[] PROGMEM = R"EOF(
+-----BEGIN EC PRIVATE KEY-----
+REPLACE_WITH_YOUR_PRIVATE_KEY
+-----END EC PRIVATE KEY-----
+)EOF";
