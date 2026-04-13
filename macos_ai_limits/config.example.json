@@ -1,0 +1,7 @@
+{
+  "esp_url": "http://192.168.1.50/limits",
+  "codex_sessions_dir": "~/.codex/sessions",
+  "claude_projects_dir": "~/.claude/projects",
+  "timeout_seconds": 15,
+  "retries": 3
+}

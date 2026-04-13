@@ -110,6 +110,168 @@ bash setup.sh
 
 **Browser note:** When you first open the URL, the browser will show a security warning because the certificate is self-signed. Tap **Advanced → Proceed** (Chrome) or **Accept the Risk** (Firefox) to continue. This is expected and safe on your local network.
 
+### esp_mini_screen_image
+
+Uploads a single image from browser to TFT over WiFi. Includes built-in WiFi provisioning (same AP flow as above, credentials in EEPROM).
+
+**How it works:**
+1. Device connects to WiFi (or starts AP for setup) and shows the URL on screen
+2. Open `http://<device-ip>` in browser
+3. Select an image file or paste image from clipboard (Ctrl+V / Cmd+V)
+4. Browser fits it to square `240x240` by the narrow side and centers/crops by the wide side
+5. Browser converts the result to RGB565 and uploads it
+6. ESP draws the received `240x240` frame line-by-line to the display
+
+### esp_mini_screen_limits
+
+Displays remaining daily and weekly limits for two services (`Codex` and `Claude`) and exposes a small HTTP API for updating the screen from another machine.
+
+![AI Limits sketch on device](esp_mini_screen_limits/ai_limits_on_device.jpg)
+
+**How it works:**
+1. Device connects to WiFi (or starts AP for setup) and shows the dashboard on the TFT
+2. Open `http://<device-ip>` in browser to use the built-in test form
+3. Upload new values with `POST http://<device-ip>/limits`
+4. Check the current device state with `GET http://<device-ip>/state`
+
+`POST /limits` currently accepts `application/x-www-form-urlencoded` fields:
+
+- `updatedAt`
+- `codexDailyText`
+- `codexDailyPercent`
+- `codexWeeklyText`
+- `codexWeeklyPercent`
+- `claudeDailyText`
+- `claudeDailyPercent`
+- `claudeWeeklyText`
+- `claudeWeeklyPercent`
+
+You can send only the fields you want to update. Text is shown as-is on the display, and percent drives the progress bar (`0..100`).
+
+Example:
+
+```bash
+curl -X POST "http://192.168.1.50/limits" \
+  --data-urlencode "updatedAt=2026-04-13 22:15" \
+  --data-urlencode "codexDailyText=72% left" \
+  --data-urlencode "codexDailyPercent=72" \
+  --data-urlencode "codexWeeklyText=58% left" \
+  --data-urlencode "codexWeeklyPercent=58" \
+  --data-urlencode "claudeDailyText=4h 10m left" \
+  --data-urlencode "claudeDailyPercent=35" \
+  --data-urlencode "claudeWeeklyText=2d 03h left" \
+  --data-urlencode "claudeWeeklyPercent=61"
+```
+
+### esp_mini_screen_mac_stats
+
+Displays Mac CPU usage per core and RAM usage on the TFT. CPU rows are split into `Performance` and `Efficiency` groups, and the device exposes a small HTTP API for updates from your Mac.
+
+![Mac Monitor sketch on device](esp_mini_screen_mac_stats/mac_monitor_on_device.jpg)
+
+You do **not** need a separate macOS app for this. The included sender script is enough unless you specifically want a menu-bar app or GUI settings.
+
+**How it works:**
+1. Device connects to WiFi (or starts AP for setup) and shows the dashboard on the TFT
+2. From the repository root, run the sender on your Mac:
+   ```bash
+   python3 tools/send_mac_stats.py --device-url http://<device-ip> --interval 1
+   ```
+3. The script samples per-core CPU load through macOS Mach APIs and RAM usage through `host_statistics64`
+4. On Apple Silicon it auto-detects `Performance` / `Efficiency` core counts via `sysctlbyname`
+5. The ESP receives the update on `POST /stats` and renders RAM + per-core bars
+
+Useful sender flags:
+
+- `--performance-cores 4`
+- `--efficiency-cores 6`
+- `--cpu-order eff-first`
+- `--max-visible-cores 12`
+- `--once --dry-run`
+
+`POST /stats` accepts `application/x-www-form-urlencoded` fields:
+
+- `updatedAt`
+- `memoryText`
+- `memoryPercent`
+- `performanceCount`
+- `efficiencyCount`
+- `coreLoads` - comma-separated percentages in screen order (`P...` first, then `E...`)
+
+`performanceCount`, `efficiencyCount`, and `coreLoads` must be sent together in the same request. Memory fields can be updated independently.
+
+Example:
+
+```bash
+curl -X POST "http://192.168.1.50/stats" \
+  --data-urlencode "updatedAt=22:15:04" \
+  --data-urlencode "memoryText=12.3/16.0 GB" \
+  --data-urlencode "memoryPercent=77" \
+  --data-urlencode "performanceCount=4" \
+  --data-urlencode "efficiencyCount=6" \
+  --data-urlencode "coreLoads=41,55,38,67,12,14,9,11,8,7"
+```
+
+### macos_ai_limits
+
+Helpers for macOS that bridge local CLI/account state to `esp_mini_screen_limits`.
+The current setup is manual only: nothing runs in `launchd`, and nothing is hooked into Claude automatically.
+
+Files:
+
+- `macos_ai_limits/ai_limits_sync.py` - parses local `Codex` and `Claude` limit data and builds the ESP payload
+- `macos_ai_limits/run_sync.sh` - the single manual entrypoint to push current limits from Terminal
+- `macos_ai_limits/config.example.json` - local config template
+
+How data is collected:
+
+- `Codex` - reads the newest `rate_limits.primary/secondary` entries from `~/.codex/sessions/**/*.jsonl`
+- `Claude` - reads local Claude Desktop transcripts from `~/.claude/projects/**/*.jsonl`
+
+Current limitation:
+
+- `Claude` data is based on locally stored transcript text. If Claude only stores a generic message like `You've hit your limit · resets 6pm`, the script maps that to the weekly slot and leaves daily as `waiting`.
+
+#### Setup on macOS
+
+1. Create local config outside the repo:
+
+```bash
+mkdir -p ~/Library/Application\ Support/esp-mini-screen-ai-limits
+cp ./macos_ai_limits/config.example.json \
+  ~/Library/Application\ Support/esp-mini-screen-ai-limits/config.json
+```
+
+2. Edit `~/Library/Application Support/esp-mini-screen-ai-limits/config.json` and set the real ESP URL:
+
+```json
+{
+  "esp_url": "http://192.168.1.50/limits",
+  "codex_sessions_dir": "~/.codex/sessions",
+  "claude_projects_dir": "~/.claude/projects",
+  "timeout_seconds": 15,
+  "retries": 3
+}
+```
+
+3. Inspect the merged payload locally:
+
+```bash
+python3 ./macos_ai_limits/ai_limits_sync.py show
+```
+
+4. Send it to the device manually from Terminal:
+
+```bash
+./macos_ai_limits/run_sync.sh
+```
+
+For a one-off dry run without sending:
+
+```bash
+python3 ./macos_ai_limits/ai_limits_sync.py push --dry-run
+```
+
 ## Credits
 
 Based on the reverse-engineering work shared on [Reddit](https://www.reddit.com/r/hardwarehacking/comments/1rbsapl/esp12f_based_smart_wifi_weather_station_hack/) by the community, including pinout discovery and CH340C mod.
