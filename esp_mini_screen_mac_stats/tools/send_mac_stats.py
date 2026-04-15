@@ -3,12 +3,14 @@
 import argparse
 import ctypes
 import datetime as dt
+import re
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 
 LIBC = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -125,6 +127,8 @@ class MacSampler:
         self.page_size = self._read_page_size()
         self.total_memory = sysctl_int("hw.memsize")
         self.brand = sysctl_string("machdep.cpu.brand_string")
+        self.gpu_label = "GPU"
+        self.gpu_supported = True
 
     def _read_page_size(self) -> int:
         page_size = ctypes.c_uint()
@@ -206,6 +210,56 @@ class MacSampler:
             return sysctl_int("hw.logicalcpu"), 0
         return performance, efficiency
 
+    def _read_gpu_ioreg(self) -> Optional[str]:
+        try:
+            result = subprocess.run(
+                ["ioreg", "-r", "-d", "1", "-w", "0", "-c", "AGXAccelerator"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=0.75,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return result.stdout
+
+    def _update_gpu_label(self, output: str) -> None:
+        if self.gpu_label != "GPU":
+            return
+
+        model_match = re.search(r'"model"\s*=\s*"([^"]+)"', output)
+        core_match = re.search(r'"gpu-core-count"\s*=\s*(\d+)', output)
+        model = model_match.group(1).strip() if model_match else ""
+        if model.startswith("Apple "):
+            model = model[len("Apple ") :]
+
+        if model and core_match:
+            self.gpu_label = f"{model} {core_match.group(1)}c"
+        elif model:
+            self.gpu_label = model
+        elif core_match:
+            self.gpu_label = f"{core_match.group(1)}c GPU"
+
+    def read_gpu(self) -> Optional[Tuple[int, str]]:
+        if not self.gpu_supported:
+            return None
+
+        output = self._read_gpu_ioreg()
+        if not output:
+            self.gpu_supported = False
+            return None
+
+        self._update_gpu_label(output)
+        match = re.search(r'"Device Utilization %"\s*=\s*(\d+)', output)
+        if not match:
+            return None
+
+        percent = max(0, min(int(match.group(1)), 100))
+        return percent, self.gpu_label
+
 
 def compute_loads(previous: Sequence[Tuple[int, int, int, int]], current: Sequence[Tuple[int, int, int, int]]) -> List[int]:
     if len(previous) != len(current):
@@ -280,8 +334,9 @@ def build_payload(
     efficiency_count: int,
     memory_percent: int,
     memory_text: str,
+    gpu_sample: Optional[Tuple[int, str]],
 ) -> dict:
-    return {
+    payload = {
         "updatedAt": dt.datetime.now().strftime("%H:%M:%S"),
         "memoryText": memory_text,
         "memoryPercent": str(memory_percent),
@@ -289,6 +344,11 @@ def build_payload(
         "efficiencyCount": str(efficiency_count),
         "coreLoads": ",".join(str(value) for value in loads),
     }
+    if gpu_sample is not None:
+        gpu_percent, gpu_text = gpu_sample
+        payload["gpuText"] = gpu_text
+        payload["gpuPercent"] = str(gpu_percent)
+    return payload
 
 
 def post_payload(url: str, payload: dict, timeout: float) -> str:
@@ -345,6 +405,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=16,
         help="Hard cap for visible cores on the 240x240 display (default: 16)",
+    )
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Disable GPU sampling via ioreg",
     )
     parser.add_argument(
         "--once",
@@ -404,12 +469,14 @@ def main() -> int:
 
                 visible_loads = split_cores(loads, performance_count, efficiency_count, args.cpu_order)
                 memory_percent, memory_text = sampler.read_memory()
+                gpu_sample = None if args.no_gpu else sampler.read_gpu()
                 payload = build_payload(
                     visible_loads,
                     performance_count,
                     efficiency_count,
                     memory_percent,
                     memory_text,
+                    gpu_sample,
                 )
 
                 if args.dry_run:

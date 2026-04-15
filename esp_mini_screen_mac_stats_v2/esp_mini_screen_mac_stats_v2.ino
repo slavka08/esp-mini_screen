@@ -2,6 +2,7 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <TFT_eSPI.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,43 +19,50 @@
 // --- Payload sizing ---
 #define UPDATED_AT_LEN    32
 #define MEMORY_TEXT_LEN   24
-#define MAX_VISIBLE_CORES 16
+#define GPU_TEXT_LEN      24
 #define FOOTER_TEXT_LEN   48
+#define MAX_VISIBLE_CORES 16
 
 // --- Animation timing ---
 #define ANIMATION_DURATION_MS 1000UL
 #define ANIMATION_FRAME_MS    33UL
 
 // --- Dashboard layout ---
-#define DASHBOARD_TITLE_Y     6
-#define DASHBOARD_STATUS_Y    28
-#define DASHBOARD_STATUS_H    12
-#define DASHBOARD_MEMORY_Y    42
-#define DASHBOARD_MEMORY_H    22
-#define DASHBOARD_CORES_Y     66
-#define DASHBOARD_TITLE_H     10
-#define DASHBOARD_SECTION_GAP 2
-#define DASHBOARD_WAITING_Y   80
-#define DASHBOARD_WAITING_H   72
-#define DASHBOARD_FOOTER_Y    226
-#define DASHBOARD_FOOTER_H    12
+#define DASHBOARD_TITLE_Y     0
+#define DASHBOARD_STATUS_Y    0
+#define DASHBOARD_STATUS_H    0
+#define DASHBOARD_TOP_Y       8
+#define DASHBOARD_TOP_W       74
+#define DASHBOARD_TOP_H       76
+#define DASHBOARD_TOP_GAP     4
+#define DASHBOARD_LEGEND_Y    88
+#define DASHBOARD_GRID_Y      100
+#define DASHBOARD_GRID_GAP    4
+#define DASHBOARD_GRID_PAD_X  8
+#define DASHBOARD_FOOTER_Y    238
+#define DASHBOARD_FOOTER_H    0
 
 const char* AP_SSID = "MiniScreen-Setup";
 const char* AP_PASS = "12345678";
 
 const uint16_t COLOR_BG = 0x0841;
-const uint16_t COLOR_MUTED = 0x8410;
+const uint16_t COLOR_PANEL = 0x10A2;
+const uint16_t COLOR_PANEL_ALT = 0x18E3;
+const uint16_t COLOR_PANEL_STROKE = 0x31A6;
+const uint16_t COLOR_MUTED = 0x7BCF;
 const uint16_t COLOR_TEXT = TFT_WHITE;
-const uint16_t COLOR_BAR_BG = 0x2104;
-const uint16_t COLOR_BORDER = 0x31C7;
+const uint16_t COLOR_TRACK = 0x2124;
 const uint16_t COLOR_PERF = 0xFC60;
 const uint16_t COLOR_EFF = 0x2E9F;
 const uint16_t COLOR_RAM = 0x867F;
+const uint16_t COLOR_GPU = 0x55DF;
+
+const float RING_DEG_TO_RAD = 0.01745329251f;
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite lineSprite = TFT_eSprite(&tft);
-TFT_eSprite memoryRowSprite = TFT_eSprite(&tft);
-TFT_eSprite coreRowSprite = TFT_eSprite(&tft);
+TFT_eSprite gaugeSprite = TFT_eSprite(&tft);
+TFT_eSprite coreTileSprite = TFT_eSprite(&tft);
 ESP8266WebServer server(80);
 
 String scannedNetworks = "";
@@ -64,11 +72,17 @@ int efficiencyCount = 0;
 int coreLoads[MAX_VISIBLE_CORES];
 char updatedAt[UPDATED_AT_LEN] = "";
 char memoryText[MEMORY_TEXT_LEN] = "";
+char gpuText[GPU_TEXT_LEN] = "";
 int memoryPercent = 0;
+int gpuPercent = 0;
+
 int displayCoreLoads[MAX_VISIBLE_CORES];
 int displayMemoryPercent = 0;
+int displayGpuPercent = 0;
 int animationStartCoreLoads[MAX_VISIBLE_CORES];
 int animationStartMemoryPercent = 0;
+int animationStartGpuPercent = 0;
+
 bool hasUploadedData = false;
 unsigned long updateCounter = 0;
 bool dashboardDirty = false;
@@ -76,30 +90,49 @@ bool dashboardCacheValid = false;
 bool animationActive = false;
 unsigned long animationStartedAt = 0;
 unsigned long lastAnimationFrameAt = 0;
+
 bool drawnHasUploadedData = false;
 int drawnPerformanceCount = -1;
 int drawnEfficiencyCount = -1;
 int drawnMemoryPercent = -1;
+int drawnGpuPercent = -1;
+int drawnCpuAveragePercent = -1;
 int drawnCoreLoads[MAX_VISIBLE_CORES];
 char drawnUpdatedAt[UPDATED_AT_LEN] = "";
 char drawnMemoryText[MEMORY_TEXT_LEN] = "";
+char drawnGpuText[GPU_TEXT_LEN] = "";
 char drawnFooter[FOOTER_TEXT_LEN] = "";
+
 bool lineSpriteReady = false;
-bool memoryRowSpriteReady = false;
-bool coreRowSpriteReady = false;
-int coreRowSpriteHeight = 0;
+bool gaugeSpriteReady = false;
+bool coreTileSpriteReady = false;
+int coreTileSpriteWidth = 0;
+int coreTileSpriteHeight = 0;
 
 void startServer();
 void startAPMode();
 void renderDashboard();
 
-struct DashboardLayout {
-  int rowHeight;
-  int perfTitleY;
-  int perfRowsY;
-  int effTitleY;
-  int effRowsY;
+struct CoreGridLayout {
+  int count;
+  int columns;
+  int rows;
+  int cellWidth;
+  int cellHeight;
+  int startX;
+  int startY;
 };
+
+int dashboardTopStartX() {
+  return (DISPLAY_SIZE - (DASHBOARD_TOP_W * 3 + DASHBOARD_TOP_GAP * 2)) / 2;
+}
+
+int dashboardLegendYForLayout(const CoreGridLayout& layout) {
+  int legendY = layout.startY - 12;
+  if (legendY < DASHBOARD_LEGEND_Y)
+    legendY = DASHBOARD_LEGEND_Y;
+  return legendY;
+}
 
 // ===================== EEPROM helpers =====================
 
@@ -141,6 +174,12 @@ int clampValue(int value, int minValue, int maxValue) {
   if (value < minValue) return minValue;
   if (value > maxValue) return maxValue;
   return value;
+}
+
+int roundFloatToInt(float value) {
+  if (value >= 0.0f)
+    return (int)(value + 0.5f);
+  return (int)(value - 0.5f);
 }
 
 void copyToBuffer(char* dst, size_t dstSize, const String& src) {
@@ -224,6 +263,14 @@ String fitText(const char* text, int maxWidth) {
   return fitTextOn(tft, text, maxWidth);
 }
 
+String compactMetricText(const char* raw) {
+  String text = String(raw);
+  text.trim();
+  text.replace(".0/", "/");
+  text.replace(".0 GB", " GB");
+  return text;
+}
+
 String jsonEscape(const char* text) {
   String escaped = "";
   for (size_t i = 0; text[i] != 0; i++) {
@@ -242,9 +289,21 @@ String jsonEscape(const char* text) {
   return escaped;
 }
 
+int computeDisplayedCpuAverage() {
+  int totalCores = performanceCount + efficiencyCount;
+  if (totalCores <= 0)
+    return 0;
+
+  long sum = 0;
+  for (int i = 0; i < totalCores; i++) {
+    sum += displayCoreLoads[i];
+  }
+  return (int)((sum + totalCores / 2) / totalCores);
+}
+
 String buildStateJson() {
   String json = "";
-  json.reserve(360);
+  json.reserve(420);
 
   String ip = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
 
@@ -258,6 +317,10 @@ String buildStateJson() {
   json += jsonEscape(memoryText);
   json += "\",\"memoryPercent\":";
   json += String(memoryPercent);
+  json += ",\"gpuText\":\"";
+  json += jsonEscape(gpuText);
+  json += "\",\"gpuPercent\":";
+  json += String(gpuPercent);
   json += ",\"performanceCount\":";
   json += String(performanceCount);
   json += ",\"efficiencyCount\":";
@@ -288,9 +351,13 @@ void invalidateDashboardCache() {
   drawnPerformanceCount = -1;
   drawnEfficiencyCount = -1;
   drawnMemoryPercent = -1;
+  drawnGpuPercent = -1;
+  drawnCpuAveragePercent = -1;
   drawnUpdatedAt[0] = 0;
   drawnMemoryText[0] = 0;
+  drawnGpuText[0] = 0;
   drawnFooter[0] = 0;
+
   for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
     drawnCoreLoads[i] = -1;
   }
@@ -305,39 +372,609 @@ bool ensureLineSprite() {
   return lineSpriteReady;
 }
 
-bool ensureMemoryRowSprite() {
-  if (memoryRowSpriteReady)
+bool ensureGaugeSprite() {
+  if (gaugeSpriteReady)
     return true;
 
-  memoryRowSprite.setColorDepth(16);
-  memoryRowSpriteReady = memoryRowSprite.createSprite(DISPLAY_SIZE, DASHBOARD_MEMORY_H) != nullptr;
-  return memoryRowSpriteReady;
+  gaugeSprite.setColorDepth(16);
+  gaugeSpriteReady = gaugeSprite.createSprite(DASHBOARD_TOP_W, DASHBOARD_TOP_H) != nullptr;
+  return gaugeSpriteReady;
 }
 
-bool ensureCoreRowSprite(int rowHeight) {
-  if (coreRowSpriteReady && coreRowSpriteHeight == rowHeight)
+bool ensureCoreTileSprite(int width, int height) {
+  if (coreTileSpriteReady && coreTileSpriteWidth == width && coreTileSpriteHeight == height)
     return true;
 
-  if (coreRowSpriteReady) {
-    coreRowSprite.deleteSprite();
-    coreRowSpriteReady = false;
-    coreRowSpriteHeight = 0;
+  if (coreTileSpriteReady) {
+    coreTileSprite.deleteSprite();
+    coreTileSpriteReady = false;
+    coreTileSpriteWidth = 0;
+    coreTileSpriteHeight = 0;
   }
 
-  coreRowSprite.setColorDepth(16);
-  coreRowSpriteReady = coreRowSprite.createSprite(DISPLAY_SIZE, rowHeight) != nullptr;
-  if (coreRowSpriteReady) {
-    coreRowSpriteHeight = rowHeight;
+  coreTileSprite.setColorDepth(16);
+  coreTileSpriteReady = coreTileSprite.createSprite(width, height) != nullptr;
+  if (coreTileSpriteReady) {
+    coreTileSpriteWidth = width;
+    coreTileSpriteHeight = height;
   }
-  return coreRowSpriteReady;
+  return coreTileSpriteReady;
+}
+
+template <typename Surface>
+void drawTextCenteredOn(Surface& surface, const String& text, int centerX, int y, int size, uint16_t color, uint16_t bg) {
+  surface.setTextSize(size);
+  surface.setTextColor(color, bg);
+  int16_t width = surface.textWidth(text);
+  surface.setCursor(centerX - width / 2, y);
+  surface.print(text);
 }
 
 void displayCentered(const String& text, int y, int size, uint16_t color) {
-  tft.setTextSize(size);
-  tft.setTextColor(color, COLOR_BG);
-  int16_t tw = tft.textWidth(text);
-  tft.setCursor((DISPLAY_SIZE - tw) / 2, y);
-  tft.print(text);
+  drawTextCenteredOn(tft, text, DISPLAY_SIZE / 2, y, size, color, COLOR_BG);
+}
+
+float easeAnimationProgress(float progress) {
+  if (progress <= 0.0f) return 0.0f;
+  if (progress >= 1.0f) return 1.0f;
+  return progress * progress * (3.0f - 2.0f * progress);
+}
+
+int interpolateAnimatedInt(int startValue, int endValue, float progress) {
+  float value = startValue + (endValue - startValue) * progress;
+  return roundFloatToInt(value);
+}
+
+void syncDisplayedMetricsToTargets() {
+  displayMemoryPercent = memoryPercent;
+  displayGpuPercent = gpuPercent;
+
+  int totalCores = performanceCount + efficiencyCount;
+  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
+    displayCoreLoads[i] = (i < totalCores) ? coreLoads[i] : 0;
+  }
+}
+
+bool displayedMetricsMatchTargets() {
+  if (displayMemoryPercent != memoryPercent || displayGpuPercent != gpuPercent)
+    return false;
+
+  int totalCores = performanceCount + efficiencyCount;
+  for (int i = 0; i < totalCores; i++) {
+    if (displayCoreLoads[i] != coreLoads[i])
+      return false;
+  }
+
+  return true;
+}
+
+void beginMetricsAnimation(unsigned long now, int previousTotalCores) {
+  animationStartMemoryPercent = displayMemoryPercent;
+  animationStartGpuPercent = displayGpuPercent;
+
+  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
+    animationStartCoreLoads[i] = (i < previousTotalCores) ? displayCoreLoads[i] : 0;
+  }
+
+  animationStartedAt = now;
+  lastAnimationFrameAt = now;
+  animationActive = !displayedMetricsMatchTargets();
+  if (!animationActive) {
+    syncDisplayedMetricsToTargets();
+  }
+}
+
+bool updateMetricsAnimation(unsigned long now) {
+  if (!animationActive)
+    return false;
+
+  unsigned long elapsed = now - animationStartedAt;
+  float progress = (elapsed >= ANIMATION_DURATION_MS)
+    ? 1.0f
+    : (float)elapsed / (float)ANIMATION_DURATION_MS;
+  float eased = easeAnimationProgress(progress);
+  bool changed = false;
+
+  int nextMemoryPercent = interpolateAnimatedInt(animationStartMemoryPercent, memoryPercent, eased);
+  if (nextMemoryPercent != displayMemoryPercent) {
+    displayMemoryPercent = nextMemoryPercent;
+    changed = true;
+  }
+
+  int nextGpuPercent = interpolateAnimatedInt(animationStartGpuPercent, gpuPercent, eased);
+  if (nextGpuPercent != displayGpuPercent) {
+    displayGpuPercent = nextGpuPercent;
+    changed = true;
+  }
+
+  int totalCores = performanceCount + efficiencyCount;
+  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
+    int nextValue = 0;
+    if (i < totalCores) {
+      nextValue = interpolateAnimatedInt(animationStartCoreLoads[i], coreLoads[i], eased);
+    }
+    if (nextValue != displayCoreLoads[i]) {
+      displayCoreLoads[i] = nextValue;
+      changed = true;
+    }
+  }
+
+  if (progress >= 1.0f) {
+    if (displayMemoryPercent != memoryPercent) {
+      displayMemoryPercent = memoryPercent;
+      changed = true;
+    }
+
+    if (displayGpuPercent != gpuPercent) {
+      displayGpuPercent = gpuPercent;
+      changed = true;
+    }
+
+    for (int i = 0; i < totalCores; i++) {
+      if (displayCoreLoads[i] != coreLoads[i]) {
+        displayCoreLoads[i] = coreLoads[i];
+        changed = true;
+      }
+    }
+
+    for (int i = totalCores; i < MAX_VISIBLE_CORES; i++) {
+      if (displayCoreLoads[i] != 0) {
+        displayCoreLoads[i] = 0;
+        changed = true;
+      }
+    }
+
+    animationActive = false;
+  }
+
+  return changed;
+}
+
+String buildStatusText() {
+  tft.setTextSize(1);
+  if (!hasUploadedData)
+    return String("Send stats to /stats to wake the rings");
+
+  String stamp = updatedAt[0] ? (String("Updated ") + updatedAt) : String("Updated via /stats");
+  return fitText(stamp.c_str(), DISPLAY_SIZE - 20);
+}
+
+String buildFooterText() {
+  tft.setTextSize(1);
+  String footer = (WiFi.status() == WL_CONNECTED)
+    ? ("http://" + WiFi.localIP().toString() + "/stats")
+    : String("Finish WiFi setup first");
+  return fitText(footer.c_str(), DISPLAY_SIZE - 20);
+}
+
+void syncDashboardCache(const String& footer) {
+  dashboardCacheValid = true;
+  drawnHasUploadedData = hasUploadedData;
+  drawnPerformanceCount = performanceCount;
+  drawnEfficiencyCount = efficiencyCount;
+  drawnMemoryPercent = displayMemoryPercent;
+  drawnGpuPercent = displayGpuPercent;
+  drawnCpuAveragePercent = computeDisplayedCpuAverage();
+
+  copyToBuffer(drawnUpdatedAt, sizeof(drawnUpdatedAt), String(updatedAt));
+  copyToBuffer(drawnMemoryText, sizeof(drawnMemoryText), String(memoryText));
+  copyToBuffer(drawnGpuText, sizeof(drawnGpuText), String(gpuText));
+  copyToBuffer(drawnFooter, sizeof(drawnFooter), footer);
+
+  int totalCores = performanceCount + efficiencyCount;
+  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
+    drawnCoreLoads[i] = (i < totalCores) ? displayCoreLoads[i] : -1;
+  }
+}
+
+int chooseCoreColumns(int count) {
+  if (count <= 0) return 1;
+  if (count <= 4) return count;
+  if (count <= 8) return 4;
+  if (count <= 10) return 5;
+  return 4;
+}
+
+CoreGridLayout buildCoreGridLayout() {
+  CoreGridLayout layout;
+  layout.count = performanceCount + efficiencyCount;
+  layout.columns = chooseCoreColumns(layout.count);
+  layout.rows = (layout.count <= 0) ? 0 : (layout.count + layout.columns - 1) / layout.columns;
+  layout.startX = DASHBOARD_GRID_PAD_X;
+  layout.startY = DASHBOARD_GRID_Y;
+
+  if (layout.rows <= 0) {
+    layout.cellWidth = 0;
+    layout.cellHeight = 0;
+    return layout;
+  }
+
+  int availableWidth = DISPLAY_SIZE - DASHBOARD_GRID_PAD_X * 2;
+  int availableHeight = DASHBOARD_FOOTER_Y - DASHBOARD_GRID_Y;
+
+  layout.cellWidth = (availableWidth - DASHBOARD_GRID_GAP * (layout.columns - 1)) / layout.columns;
+  layout.cellHeight = (availableHeight - DASHBOARD_GRID_GAP * (layout.rows - 1)) / layout.rows;
+  int maxCellHeight = layout.cellWidth + 6;
+  if (layout.cellHeight > maxCellHeight)
+    layout.cellHeight = maxCellHeight;
+  int totalGridHeight = layout.rows * layout.cellHeight + DASHBOARD_GRID_GAP * (layout.rows - 1);
+  int alignedStartY = DASHBOARD_FOOTER_Y - totalGridHeight;
+  if (alignedStartY > layout.startY)
+    layout.startY = alignedStartY;
+  return layout;
+}
+
+void coreCellPosition(const CoreGridLayout& layout, int index, int& x, int& y) {
+  int col = index % layout.columns;
+  int row = index / layout.columns;
+  x = layout.startX + col * (layout.cellWidth + DASHBOARD_GRID_GAP);
+  y = layout.startY + row * (layout.cellHeight + DASHBOARD_GRID_GAP);
+}
+
+template <typename Surface>
+void drawRingOn(
+  Surface& surface,
+  int cx,
+  int cy,
+  int radius,
+  int thickness,
+  int percent,
+  uint16_t accent,
+  uint16_t track
+) {
+  int clamped = clampPercent(percent);
+  bool pixelMode = thickness <= 1;
+  int dotRadius = thickness / 2;
+  if (!pixelMode && dotRadius < 1)
+    dotRadius = 1;
+
+  int pathRadius = pixelMode ? radius : (radius - dotRadius);
+  float step = pixelMode
+    ? ((radius >= 18) ? 4.0f : 6.0f)
+    : ((radius >= 18) ? 4.0f : 7.0f);
+
+  for (float angle = 0.0f; angle < 360.0f; angle += step) {
+    float rad = (angle - 90.0f) * RING_DEG_TO_RAD;
+    int x = cx + roundFloatToInt(cosf(rad) * pathRadius);
+    int y = cy + roundFloatToInt(sinf(rad) * pathRadius);
+    if (pixelMode) {
+      surface.drawPixel(x, y, track);
+    } else {
+      surface.fillCircle(x, y, dotRadius, track);
+    }
+  }
+
+  if (clamped <= 0)
+    return;
+
+  float endAngle = ((float)clamped / 100.0f) * 360.0f;
+  for (float angle = 0.0f; angle <= endAngle; angle += step) {
+    float rad = (angle - 90.0f) * RING_DEG_TO_RAD;
+    int x = cx + roundFloatToInt(cosf(rad) * pathRadius);
+    int y = cy + roundFloatToInt(sinf(rad) * pathRadius);
+    if (pixelMode) {
+      surface.drawPixel(x, y, accent);
+    } else {
+      surface.fillCircle(x, y, dotRadius, accent);
+    }
+  }
+
+  float capRad = (endAngle - 90.0f) * RING_DEG_TO_RAD;
+  int capX = cx + roundFloatToInt(cosf(capRad) * pathRadius);
+  int capY = cy + roundFloatToInt(sinf(capRad) * pathRadius);
+  if (pixelMode) {
+    surface.drawPixel(capX, capY, accent);
+  } else {
+    surface.fillCircle(capX, capY, dotRadius + 1, accent);
+  }
+}
+
+template <typename Surface>
+void drawGaugeCardOn(
+  Surface& surface,
+  int x,
+  int y,
+  int width,
+  int height,
+  const String& title,
+  const String& subtitle,
+  int percent,
+  uint16_t accent
+) {
+  surface.fillRoundRect(x, y, width, height, 14, COLOR_PANEL);
+  surface.drawRoundRect(x, y, width, height, 14, COLOR_PANEL_STROKE);
+
+  surface.setTextSize(1);
+  String titleText = fitTextOn(surface, title.c_str(), width - 16);
+  drawTextCenteredOn(surface, titleText, x + width / 2, y + 6, 1, accent, COLOR_PANEL);
+
+  int ringCx = x + width / 2;
+  int ringCy = y + 36;
+  drawRingOn(surface, ringCx, ringCy, 17, 1, percent, accent, COLOR_TRACK);
+
+  String percentText = String(percent) + "%";
+  drawTextCenteredOn(surface, percentText, ringCx, ringCy - 4, 1, COLOR_TEXT, COLOR_PANEL);
+
+  surface.setTextSize(1);
+  String subtitleText = fitTextOn(surface, subtitle.c_str(), width - 14);
+  drawTextCenteredOn(surface, subtitleText, x + width / 2, y + height - 11, 1, COLOR_MUTED, COLOR_PANEL);
+}
+
+template <typename Surface>
+void drawCoreTileOn(
+  Surface& surface,
+  int x,
+  int y,
+  int width,
+  int height,
+  const char* prefix,
+  int index,
+  int load,
+  uint16_t accent
+) {
+  surface.fillRoundRect(x, y, width, height, 8, COLOR_PANEL_ALT);
+  surface.drawRoundRect(x, y, width, height, 8, COLOR_PANEL_STROKE);
+
+  int ringRadius = min(width / 2 - 5, height / 2 - 10);
+  if (ringRadius < 8)
+    ringRadius = 8;
+  int ringThickness = 1;
+  int ringCx = x + width / 2;
+  int ringCy = y + height / 2 + 1;
+
+  drawRingOn(surface, ringCx, ringCy, ringRadius, ringThickness, load, accent, COLOR_TRACK);
+
+  String label = String(prefix) + String(index + 1);
+  String value = String(load) + "%";
+  surface.setTextSize(1);
+  surface.setTextColor(accent, COLOR_PANEL_ALT);
+  surface.setCursor(x + 5, y + 5);
+  surface.print(label);
+
+  surface.setTextColor(COLOR_TEXT, COLOR_PANEL_ALT);
+  drawTextCenteredOn(surface, value, ringCx, ringCy - 4, 1, COLOR_TEXT, COLOR_PANEL_ALT);
+}
+
+void drawStatusLine() {
+  tft.fillRect(0, DASHBOARD_STATUS_Y, DISPLAY_SIZE, DASHBOARD_STATUS_H, COLOR_BG);
+  String text = buildStatusText();
+  drawTextCenteredOn(tft, text, DISPLAY_SIZE / 2, DASHBOARD_STATUS_Y, 1, COLOR_MUTED, COLOR_BG);
+}
+
+void drawStatusLineSprite() {
+  if (!ensureLineSprite()) {
+    drawStatusLine();
+    return;
+  }
+
+  lineSprite.fillSprite(COLOR_BG);
+  String text = buildStatusText();
+  drawTextCenteredOn(lineSprite, text, DISPLAY_SIZE / 2, 0, 1, COLOR_MUTED, COLOR_BG);
+  lineSprite.pushSprite(0, DASHBOARD_STATUS_Y);
+}
+
+void drawCoreLegend(const CoreGridLayout& layout) {
+  int legendY = dashboardLegendYForLayout(layout);
+  int legendHeight = layout.startY - legendY;
+  if (legendHeight < 10)
+    legendHeight = 10;
+
+  tft.fillRect(0, legendY, DISPLAY_SIZE, legendHeight, COLOR_BG);
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_MUTED, COLOR_BG);
+  tft.setCursor(10, legendY);
+  tft.print("CPU RINGS");
+
+  tft.fillCircle(96, legendY + 4, 3, COLOR_PERF);
+  tft.setCursor(103, legendY);
+  tft.print("P");
+
+  tft.fillCircle(122, legendY + 4, 3, COLOR_EFF);
+  tft.setCursor(129, legendY);
+  tft.print("E");
+
+  String summary = String(performanceCount) + "P/" + String(efficiencyCount) + "E";
+  int16_t width = tft.textWidth(summary);
+  tft.setCursor(DISPLAY_SIZE - 10 - width, legendY);
+  tft.print(summary);
+}
+
+void drawGaugeCard(int x, int y, const String& title, const String& subtitle, int percent, uint16_t accent) {
+  tft.fillRect(x, y, DASHBOARD_TOP_W, DASHBOARD_TOP_H, COLOR_BG);
+  drawGaugeCardOn(tft, x, y, DASHBOARD_TOP_W, DASHBOARD_TOP_H, title, subtitle, percent, accent);
+}
+
+void drawGaugeCardSprite(int x, int y, const String& title, const String& subtitle, int percent, uint16_t accent) {
+  if (!ensureGaugeSprite()) {
+    drawGaugeCard(x, y, title, subtitle, percent, accent);
+    return;
+  }
+
+  gaugeSprite.fillSprite(COLOR_BG);
+  drawGaugeCardOn(gaugeSprite, 0, 0, DASHBOARD_TOP_W, DASHBOARD_TOP_H, title, subtitle, percent, accent);
+  gaugeSprite.pushSprite(x, y);
+}
+
+String buildMemorySubtitle() {
+  if (memoryText[0] != 0)
+    return compactMetricText(memoryText);
+  return String("waiting");
+}
+
+String buildCpuSubtitle() {
+  int totalCores = performanceCount + efficiencyCount;
+  if (totalCores <= 0)
+    return String("idle");
+  return String(totalCores) + " cores";
+}
+
+String buildGpuSubtitle() {
+  if (gpuText[0] != 0)
+    return String(gpuText);
+  if (hasUploadedData)
+    return String("n/a");
+  return String("auto");
+}
+
+void drawTopGauges() {
+  int leftX = dashboardTopStartX();
+  int midX = leftX + DASHBOARD_TOP_W + DASHBOARD_TOP_GAP;
+  int rightX = midX + DASHBOARD_TOP_W + DASHBOARD_TOP_GAP;
+
+  drawGaugeCard(leftX, DASHBOARD_TOP_Y, "RAM", buildMemorySubtitle(), displayMemoryPercent, COLOR_RAM);
+  drawGaugeCard(midX, DASHBOARD_TOP_Y, "CPU", buildCpuSubtitle(), computeDisplayedCpuAverage(), COLOR_PERF);
+  drawGaugeCard(rightX, DASHBOARD_TOP_Y, "GPU", buildGpuSubtitle(), displayGpuPercent, COLOR_GPU);
+}
+
+void drawMemoryGaugeSprite() {
+  drawGaugeCardSprite(dashboardTopStartX(), DASHBOARD_TOP_Y, "RAM", buildMemorySubtitle(), displayMemoryPercent, COLOR_RAM);
+}
+
+void drawCpuGaugeSprite() {
+  drawGaugeCardSprite(
+    dashboardTopStartX() + DASHBOARD_TOP_W + DASHBOARD_TOP_GAP,
+    DASHBOARD_TOP_Y,
+    "CPU",
+    buildCpuSubtitle(),
+    computeDisplayedCpuAverage(),
+    COLOR_PERF
+  );
+}
+
+void drawGpuGaugeSprite() {
+  drawGaugeCardSprite(
+    dashboardTopStartX() + (DASHBOARD_TOP_W + DASHBOARD_TOP_GAP) * 2,
+    DASHBOARD_TOP_Y,
+    "GPU",
+    buildGpuSubtitle(),
+    displayGpuPercent,
+    COLOR_GPU
+  );
+}
+
+void drawCoreTile(int x, int y, int width, int height, const char* prefix, int index, int load, uint16_t accent) {
+  tft.fillRect(x, y, width, height, COLOR_BG);
+  drawCoreTileOn(tft, x, y, width, height, prefix, index, load, accent);
+}
+
+void drawCoreTileSprite(int x, int y, int width, int height, const char* prefix, int index, int load, uint16_t accent) {
+  if (!ensureCoreTileSprite(width, height)) {
+    drawCoreTile(x, y, width, height, prefix, index, load, accent);
+    return;
+  }
+
+  coreTileSprite.fillSprite(COLOR_BG);
+  drawCoreTileOn(coreTileSprite, 0, 0, width, height, prefix, index, load, accent);
+  coreTileSprite.pushSprite(x, y);
+}
+
+void drawCoreGrid(const CoreGridLayout& layout) {
+  if (layout.count <= 0)
+    return;
+
+  for (int index = 0; index < layout.count; index++) {
+    int x = 0;
+    int y = 0;
+    coreCellPosition(layout, index, x, y);
+
+    bool isPerf = index < performanceCount;
+    const char* prefix = isPerf ? "P" : "E";
+    int localIndex = isPerf ? index : (index - performanceCount);
+    uint16_t accent = isPerf ? COLOR_PERF : COLOR_EFF;
+
+    drawCoreTile(x, y, layout.cellWidth, layout.cellHeight, prefix, localIndex, displayCoreLoads[index], accent);
+  }
+}
+
+void renderWaitingState() {
+  int cardY = DASHBOARD_GRID_Y;
+  int cardH = DISPLAY_SIZE - DASHBOARD_GRID_Y - 8;
+  tft.fillRoundRect(12, cardY, DISPLAY_SIZE - 24, cardH, 14, COLOR_PANEL);
+  tft.drawRoundRect(12, cardY, DISPLAY_SIZE - 24, cardH, 14, COLOR_PANEL_STROKE);
+  drawTextCenteredOn(tft, "Waiting for Mac sender", DISPLAY_SIZE / 2, cardY + 18, 1, COLOR_MUTED, COLOR_PANEL);
+  drawTextCenteredOn(tft, "POST /stats", DISPLAY_SIZE / 2, cardY + 42, 1, COLOR_TEXT, COLOR_PANEL);
+  drawTextCenteredOn(tft, "run local tools/send_mac_stats.py", DISPLAY_SIZE / 2, cardY + 72, 1, COLOR_MUTED, COLOR_PANEL);
+}
+
+void renderFooter() {
+  String footer = buildFooterText();
+  tft.fillRect(0, DASHBOARD_FOOTER_Y, DISPLAY_SIZE, DASHBOARD_FOOTER_H, COLOR_BG);
+  drawTextCenteredOn(tft, footer, DISPLAY_SIZE / 2, DASHBOARD_FOOTER_Y, 1, COLOR_MUTED, COLOR_BG);
+}
+
+void renderFooterSprite() {
+  if (!ensureLineSprite()) {
+    renderFooter();
+    return;
+  }
+
+  String footer = buildFooterText();
+  lineSprite.fillSprite(COLOR_BG);
+  drawTextCenteredOn(lineSprite, footer, DISPLAY_SIZE / 2, 0, 1, COLOR_MUTED, COLOR_BG);
+  lineSprite.pushSprite(0, DASHBOARD_FOOTER_Y);
+}
+
+void renderDashboardFull() {
+  tft.fillScreen(COLOR_BG);
+  drawTopGauges();
+
+  if (!hasUploadedData) {
+    renderWaitingState();
+    syncDashboardCache("");
+    return;
+  }
+
+  CoreGridLayout layout = buildCoreGridLayout();
+  drawCoreLegend(layout);
+  drawCoreGrid(layout);
+  syncDashboardCache("");
+}
+
+void renderDashboardPartial() {
+  int cpuAverage = computeDisplayedCpuAverage();
+  if (strcmp(drawnMemoryText, memoryText) != 0 || drawnMemoryPercent != displayMemoryPercent) {
+    drawMemoryGaugeSprite();
+  }
+  if (strcmp(drawnGpuText, gpuText) != 0 || drawnGpuPercent != displayGpuPercent) {
+    drawGpuGaugeSprite();
+  }
+  if (drawnCpuAveragePercent != cpuAverage) {
+    drawCpuGaugeSprite();
+  }
+
+  CoreGridLayout layout = buildCoreGridLayout();
+  for (int index = 0; index < layout.count; index++) {
+    if (drawnCoreLoads[index] == displayCoreLoads[index])
+      continue;
+
+    int x = 0;
+    int y = 0;
+    coreCellPosition(layout, index, x, y);
+
+    bool isPerf = index < performanceCount;
+    const char* prefix = isPerf ? "P" : "E";
+    int localIndex = isPerf ? index : (index - performanceCount);
+    uint16_t accent = isPerf ? COLOR_PERF : COLOR_EFF;
+
+    drawCoreTileSprite(x, y, layout.cellWidth, layout.cellHeight, prefix, localIndex, displayCoreLoads[index], accent);
+  }
+  syncDashboardCache("");
+}
+
+void renderDashboard() {
+  if (!dashboardCacheValid ||
+      drawnHasUploadedData != hasUploadedData ||
+      drawnPerformanceCount != performanceCount ||
+      drawnEfficiencyCount != efficiencyCount) {
+    renderDashboardFull();
+    return;
+  }
+
+  if (!hasUploadedData) {
+    return;
+  }
+
+  renderDashboardPartial();
 }
 
 void showAPInfo() {
@@ -391,447 +1028,6 @@ void showConnectionFailed() {
   delay(2000);
 }
 
-int computeCoreRowHeight(int perfCount, int effCount) {
-  int totalCores = perfCount + effCount;
-  if (totalCores <= 0)
-    return 10;
-
-  int sectionHeaders = 0;
-  if (perfCount > 0) sectionHeaders++;
-  if (effCount > 0) sectionHeaders++;
-
-  int availableHeight = DASHBOARD_FOOTER_Y - DASHBOARD_CORES_Y;
-  int rowHeight = (availableHeight - sectionHeaders * DASHBOARD_TITLE_H) / totalCores;
-  return clampValue(rowHeight, 8, 12);
-}
-
-DashboardLayout buildDashboardLayout() {
-  DashboardLayout layout;
-  layout.rowHeight = computeCoreRowHeight(performanceCount, efficiencyCount);
-  layout.perfTitleY = -1;
-  layout.perfRowsY = -1;
-  layout.effTitleY = -1;
-  layout.effRowsY = -1;
-
-  int y = DASHBOARD_CORES_Y;
-  if (performanceCount > 0) {
-    layout.perfTitleY = y;
-    y += DASHBOARD_TITLE_H;
-    layout.perfRowsY = y;
-    y += performanceCount * layout.rowHeight;
-  }
-
-  if (performanceCount > 0 && efficiencyCount > 0)
-    y += DASHBOARD_SECTION_GAP;
-
-  if (efficiencyCount > 0) {
-    layout.effTitleY = y;
-    y += DASHBOARD_TITLE_H;
-    layout.effRowsY = y;
-  }
-
-  return layout;
-}
-
-float easeAnimationProgress(float progress) {
-  if (progress <= 0.0f) return 0.0f;
-  if (progress >= 1.0f) return 1.0f;
-  return progress * progress * (3.0f - 2.0f * progress);
-}
-
-int interpolateAnimatedInt(int startValue, int endValue, float progress) {
-  float value = startValue + (endValue - startValue) * progress;
-  if (value >= 0.0f)
-    return (int)(value + 0.5f);
-  return (int)(value - 0.5f);
-}
-
-void syncDisplayedMetricsToTargets() {
-  displayMemoryPercent = memoryPercent;
-
-  int totalCores = performanceCount + efficiencyCount;
-  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
-    displayCoreLoads[i] = (i < totalCores) ? coreLoads[i] : 0;
-  }
-}
-
-bool displayedMetricsMatchTargets() {
-  if (displayMemoryPercent != memoryPercent)
-    return false;
-
-  int totalCores = performanceCount + efficiencyCount;
-  for (int i = 0; i < totalCores; i++) {
-    if (displayCoreLoads[i] != coreLoads[i])
-      return false;
-  }
-
-  return true;
-}
-
-void beginMetricsAnimation(unsigned long now, int previousTotalCores) {
-  animationStartMemoryPercent = displayMemoryPercent;
-
-  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
-    animationStartCoreLoads[i] = (i < previousTotalCores) ? displayCoreLoads[i] : 0;
-  }
-
-  animationStartedAt = now;
-  lastAnimationFrameAt = now;
-  animationActive = !displayedMetricsMatchTargets();
-  if (!animationActive) {
-    syncDisplayedMetricsToTargets();
-  }
-}
-
-bool updateMetricsAnimation(unsigned long now) {
-  if (!animationActive)
-    return false;
-
-  unsigned long elapsed = now - animationStartedAt;
-  float progress = (elapsed >= ANIMATION_DURATION_MS)
-    ? 1.0f
-    : (float)elapsed / (float)ANIMATION_DURATION_MS;
-  float eased = easeAnimationProgress(progress);
-  bool changed = false;
-
-  int nextMemoryPercent = interpolateAnimatedInt(animationStartMemoryPercent, memoryPercent, eased);
-  if (nextMemoryPercent != displayMemoryPercent) {
-    displayMemoryPercent = nextMemoryPercent;
-    changed = true;
-  }
-
-  int totalCores = performanceCount + efficiencyCount;
-  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
-    int nextValue = 0;
-    if (i < totalCores) {
-      nextValue = interpolateAnimatedInt(animationStartCoreLoads[i], coreLoads[i], eased);
-    }
-    if (nextValue != displayCoreLoads[i]) {
-      displayCoreLoads[i] = nextValue;
-      changed = true;
-    }
-  }
-
-  if (progress >= 1.0f) {
-    if (displayMemoryPercent != memoryPercent) {
-      displayMemoryPercent = memoryPercent;
-      changed = true;
-    }
-
-    for (int i = 0; i < totalCores; i++) {
-      if (displayCoreLoads[i] != coreLoads[i]) {
-        displayCoreLoads[i] = coreLoads[i];
-        changed = true;
-      }
-    }
-
-    for (int i = totalCores; i < MAX_VISIBLE_CORES; i++) {
-      if (displayCoreLoads[i] != 0) {
-        displayCoreLoads[i] = 0;
-        changed = true;
-      }
-    }
-
-    animationActive = false;
-  }
-
-  return changed;
-}
-
-String buildStatusText() {
-  tft.setTextSize(1);
-  if (!hasUploadedData)
-    return String("Connect sender and upload stats");
-
-  String stamp = updatedAt[0] ? (String("Updated: ") + updatedAt) : String("Updated via /stats");
-  return fitText(stamp.c_str(), DISPLAY_SIZE - 20);
-}
-
-String buildFooterText() {
-  tft.setTextSize(1);
-  String footer = (WiFi.status() == WL_CONNECTED)
-    ? ("http://" + WiFi.localIP().toString() + "/stats")
-    : String("Finish WiFi setup first");
-  return fitText(footer.c_str(), DISPLAY_SIZE - 20);
-}
-
-void syncDashboardCache(const String& footer) {
-  dashboardCacheValid = true;
-  drawnHasUploadedData = hasUploadedData;
-  drawnPerformanceCount = performanceCount;
-  drawnEfficiencyCount = efficiencyCount;
-  drawnMemoryPercent = displayMemoryPercent;
-  copyToBuffer(drawnUpdatedAt, sizeof(drawnUpdatedAt), String(updatedAt));
-  copyToBuffer(drawnMemoryText, sizeof(drawnMemoryText), String(memoryText));
-  copyToBuffer(drawnFooter, sizeof(drawnFooter), footer);
-
-  int totalCores = performanceCount + efficiencyCount;
-  for (int i = 0; i < MAX_VISIBLE_CORES; i++) {
-    drawnCoreLoads[i] = (i < totalCores) ? displayCoreLoads[i] : -1;
-  }
-}
-
-void drawSectionTitle(int y, const char* label, uint16_t color) {
-  tft.setTextSize(1);
-  tft.setTextColor(color, COLOR_BG);
-  tft.setCursor(10, y);
-  tft.print(label);
-
-  int lineX = 10 + tft.textWidth(label) + 6;
-  if (lineX < DISPLAY_SIZE - 10) {
-    tft.drawFastHLine(lineX, y + 4, DISPLAY_SIZE - lineX - 10, color);
-  }
-}
-
-void drawStatusLine() {
-  tft.fillRect(0, DASHBOARD_STATUS_Y, DISPLAY_SIZE, DASHBOARD_STATUS_H, COLOR_BG);
-  tft.setTextSize(1);
-
-  String text = buildStatusText();
-  tft.setTextColor(COLOR_MUTED, COLOR_BG);
-  int16_t width = tft.textWidth(text);
-  tft.setCursor((DISPLAY_SIZE - width) / 2, DASHBOARD_STATUS_Y);
-  tft.print(text);
-}
-
-void drawStatusLineSprite() {
-  if (!ensureLineSprite()) {
-    drawStatusLine();
-    return;
-  }
-
-  lineSprite.fillSprite(COLOR_BG);
-  lineSprite.setTextSize(1);
-
-  String text = buildStatusText();
-  lineSprite.setTextColor(COLOR_MUTED, COLOR_BG);
-  int16_t width = lineSprite.textWidth(text);
-  lineSprite.setCursor((DISPLAY_SIZE - width) / 2, 0);
-  lineSprite.print(text);
-  lineSprite.pushSprite(0, DASHBOARD_STATUS_Y);
-}
-
-template <typename Surface>
-void drawUsageBarOn(Surface& surface, int x, int y, int width, int height, int percent, uint16_t accent) {
-  int clamped = clampPercent(percent);
-  surface.fillRect(x, y, width, height, COLOR_BAR_BG);
-  int fillWidth = 0;
-  if (clamped > 0) {
-    fillWidth = (width * clamped + 50) / 100;
-  }
-  if (fillWidth > 0) {
-    surface.fillRect(x, y, fillWidth, height, accent);
-  }
-  surface.drawRect(x, y, width, height, COLOR_BORDER);
-}
-
-void drawUsageBar(int x, int y, int width, int height, int percent, uint16_t accent) {
-  drawUsageBarOn(tft, x, y, width, height, percent, accent);
-}
-
-template <typename Surface>
-void drawMemoryRowContentOn(Surface& surface, int y) {
-  surface.setTextSize(1);
-  surface.setTextColor(COLOR_RAM, COLOR_BG);
-  surface.setCursor(10, y);
-  surface.print("RAM");
-
-  String value = memoryText[0] ? fitTextOn(surface, memoryText, 126) : String("waiting");
-  surface.setTextColor(memoryText[0] ? COLOR_TEXT : COLOR_MUTED, COLOR_BG);
-  surface.setCursor(38, y);
-  surface.print(value);
-
-  String percentText = String(displayMemoryPercent) + "%";
-  int16_t percentWidth = surface.textWidth(percentText);
-  surface.setCursor(DISPLAY_SIZE - 10 - percentWidth, y);
-  surface.print(percentText);
-
-  drawUsageBarOn(surface, 10, y + 10, DISPLAY_SIZE - 20, 8, displayMemoryPercent, COLOR_RAM);
-}
-
-void drawMemoryRow(int y) {
-  tft.fillRect(0, y, DISPLAY_SIZE, DASHBOARD_MEMORY_H, COLOR_BG);
-  drawMemoryRowContentOn(tft, y);
-}
-
-void drawMemoryRowSprite() {
-  if (!ensureMemoryRowSprite()) {
-    drawMemoryRow(DASHBOARD_MEMORY_Y);
-    return;
-  }
-
-  memoryRowSprite.fillSprite(COLOR_BG);
-  drawMemoryRowContentOn(memoryRowSprite, 0);
-  memoryRowSprite.pushSprite(0, DASHBOARD_MEMORY_Y);
-}
-
-template <typename Surface>
-void drawCoreRowContentOn(Surface& surface, int y, int rowHeight, const char* prefix, int index, int load, uint16_t accent) {
-  surface.setTextSize(1);
-
-  String label = String(prefix) + String(index + 1);
-  surface.setTextColor(COLOR_TEXT, COLOR_BG);
-  surface.setCursor(10, y);
-  surface.print(label);
-
-  String value = String(load) + "%";
-  int16_t valueWidth = surface.textWidth(value);
-  int barX = 32;
-  int barWidth = DISPLAY_SIZE - barX - valueWidth - 16;
-  int barHeight = rowHeight - 3;
-  if (barHeight < 5)
-    barHeight = 5;
-
-  drawUsageBarOn(surface, barX, y + 1, barWidth, barHeight, load, accent);
-
-  surface.setCursor(DISPLAY_SIZE - 10 - valueWidth, y);
-  surface.print(value);
-}
-
-void drawCoreRow(int y, int rowHeight, const char* prefix, int index, int load, uint16_t accent) {
-  tft.fillRect(0, y, DISPLAY_SIZE, rowHeight, COLOR_BG);
-  drawCoreRowContentOn(tft, y, rowHeight, prefix, index, load, accent);
-}
-
-void drawCoreRowSprite(int y, int rowHeight, const char* prefix, int index, int load, uint16_t accent) {
-  if (!ensureCoreRowSprite(rowHeight)) {
-    drawCoreRow(y, rowHeight, prefix, index, load, accent);
-    return;
-  }
-
-  coreRowSprite.fillSprite(COLOR_BG);
-  drawCoreRowContentOn(coreRowSprite, 0, rowHeight, prefix, index, load, accent);
-  coreRowSprite.pushSprite(0, y);
-}
-
-void drawCoreSection(int& y, const char* title, const char* prefix, int count, int startIndex, int rowHeight, uint16_t accent) {
-  if (count <= 0)
-    return;
-
-  drawSectionTitle(y, title, accent);
-  y += DASHBOARD_TITLE_H;
-
-  for (int i = 0; i < count; i++) {
-    drawCoreRow(y, rowHeight, prefix, i, displayCoreLoads[startIndex + i], accent);
-    y += rowHeight;
-  }
-}
-
-void renderWaitingState() {
-  tft.fillRect(0, DASHBOARD_WAITING_Y, DISPLAY_SIZE, DASHBOARD_WAITING_H, COLOR_BG);
-  displayCentered("Waiting for Mac sender", 88, 1, COLOR_MUTED);
-  displayCentered("POST /stats", 108, 2, COLOR_TEXT);
-  displayCentered("run local tools/send_mac_stats.py", 136, 1, COLOR_MUTED);
-}
-
-void renderFooter() {
-  String footer = buildFooterText();
-  tft.fillRect(0, DASHBOARD_FOOTER_Y, DISPLAY_SIZE, DASHBOARD_FOOTER_H, COLOR_BG);
-  tft.setTextSize(1);
-  tft.setTextColor(COLOR_MUTED, COLOR_BG);
-  int16_t footerWidth = tft.textWidth(footer);
-  tft.setCursor((DISPLAY_SIZE - footerWidth) / 2, DASHBOARD_FOOTER_Y);
-  tft.print(footer);
-}
-
-void renderFooterSprite() {
-  if (!ensureLineSprite()) {
-    renderFooter();
-    return;
-  }
-
-  String footer = buildFooterText();
-  lineSprite.fillSprite(COLOR_BG);
-  lineSprite.setTextSize(1);
-  lineSprite.setTextColor(COLOR_MUTED, COLOR_BG);
-  int16_t footerWidth = lineSprite.textWidth(footer);
-  lineSprite.setCursor((DISPLAY_SIZE - footerWidth) / 2, 0);
-  lineSprite.print(footer);
-  lineSprite.pushSprite(0, DASHBOARD_FOOTER_Y);
-}
-
-void renderDashboardFull() {
-  tft.fillScreen(COLOR_BG);
-  displayCentered("Mac Monitor", DASHBOARD_TITLE_Y, 2, COLOR_TEXT);
-  drawStatusLine();
-
-  if (!hasUploadedData) {
-    renderWaitingState();
-    renderFooter();
-    syncDashboardCache(buildFooterText());
-    return;
-  }
-
-  drawMemoryRow(DASHBOARD_MEMORY_Y);
-
-  DashboardLayout layout = buildDashboardLayout();
-  int y = DASHBOARD_CORES_Y;
-  if (performanceCount > 0) {
-    drawCoreSection(y, "Performance", "P", performanceCount, 0, layout.rowHeight, COLOR_PERF);
-  }
-  if (performanceCount > 0 && efficiencyCount > 0)
-    y += DASHBOARD_SECTION_GAP;
-  if (efficiencyCount > 0) {
-    drawCoreSection(y, "Efficiency", "E", efficiencyCount, performanceCount, layout.rowHeight, COLOR_EFF);
-  }
-
-  renderFooter();
-  syncDashboardCache(buildFooterText());
-}
-
-void renderDashboardPartial() {
-  DashboardLayout layout = buildDashboardLayout();
-
-  if (strcmp(drawnUpdatedAt, updatedAt) != 0) {
-    drawStatusLineSprite();
-  }
-
-  if (strcmp(drawnMemoryText, memoryText) != 0 || drawnMemoryPercent != displayMemoryPercent) {
-    drawMemoryRowSprite();
-  }
-
-  for (int i = 0; i < performanceCount; i++) {
-    if (drawnCoreLoads[i] != displayCoreLoads[i]) {
-      drawCoreRowSprite(layout.perfRowsY + i * layout.rowHeight, layout.rowHeight, "P", i, displayCoreLoads[i], COLOR_PERF);
-    }
-  }
-
-  for (int i = 0; i < efficiencyCount; i++) {
-    int coreIndex = performanceCount + i;
-    if (drawnCoreLoads[coreIndex] != displayCoreLoads[coreIndex]) {
-      drawCoreRowSprite(layout.effRowsY + i * layout.rowHeight, layout.rowHeight, "E", i, displayCoreLoads[coreIndex], COLOR_EFF);
-    }
-  }
-
-  String footer = buildFooterText();
-  if (strcmp(drawnFooter, footer.c_str()) != 0) {
-    renderFooterSprite();
-  }
-
-  syncDashboardCache(footer);
-}
-
-void renderDashboard() {
-  if (!dashboardCacheValid ||
-      drawnHasUploadedData != hasUploadedData ||
-      drawnPerformanceCount != performanceCount ||
-      drawnEfficiencyCount != efficiencyCount) {
-    renderDashboardFull();
-    return;
-  }
-
-  if (!hasUploadedData) {
-    String footer = buildFooterText();
-    if (strcmp(drawnFooter, footer.c_str()) != 0) {
-      renderFooter();
-      syncDashboardCache(footer);
-    }
-    return;
-  }
-
-  renderDashboardPartial();
-}
-
 // ===================== Web pages =====================
 
 const char STATS_HTML[] PROGMEM = R"rawliteral(
@@ -839,16 +1035,16 @@ const char STATS_HTML[] PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Mac Monitor</title>
+<title>Mac Orbit v2</title>
 <style>
-body{font-family:sans-serif;background:#11161f;color:#e8eef6;margin:0;padding:16px}
-.panel{max-width:440px;margin:0 auto}
-h2{margin:0 0 8px;color:#9ef0ff}
-.sub{margin:0 0 16px;color:#9fb2c8;font-size:14px;line-height:1.4}
-label{display:block;font-size:13px;color:#b6c6da;margin:12px 0}
-input{width:100%;box-sizing:border-box;padding:10px;margin-top:6px;border:1px solid #31415a;border-radius:10px;background:#0f1520;color:#eef6ff}
+body{font-family:sans-serif;background:#0d1118;color:#edf4ff;margin:0;padding:16px}
+.panel{max-width:480px;margin:0 auto}
+h2{margin:0 0 8px;color:#9cf2ff}
+.sub{margin:0 0 16px;color:#a6b9d0;font-size:14px;line-height:1.4}
+label{display:block;font-size:13px;color:#bfd0e3;margin:12px 0}
+input{width:100%;box-sizing:border-box;padding:10px;margin-top:6px;border:1px solid #31425a;border-radius:10px;background:#101723;color:#eef6ff}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-button{flex:1;min-width:120px;padding:12px;border:none;border-radius:10px;background:#9ef0ff;color:#07202a;font-weight:700;cursor:pointer}
+button{flex:1;min-width:120px;padding:12px;border:none;border-radius:10px;background:#9cf2ff;color:#06222c;font-weight:700;cursor:pointer}
 button.alt{background:#28364b;color:#dce9f8}
 #status{margin-top:12px;color:#9ef0a8;min-height:20px}
 pre{background:#0b1018;border:1px solid #263345;border-radius:12px;padding:12px;white-space:pre-wrap;word-break:break-word;color:#a7f5ba}
@@ -856,8 +1052,8 @@ pre{background:#0b1018;border:1px solid #263345;border-radius:12px;padding:12px;
 </head>
 <body>
 <div class='panel'>
-  <h2>Mac Monitor</h2>
-  <p class='sub'>Test <code>POST /stats</code>. Core loads use CSV in P-then-E order, for example <code>41,55,38,67,12,14,9,11</code>.</p>
+  <h2>Mac Orbit v2</h2>
+  <p class='sub'>Circular dashboard test page. CPU loads use CSV in P-then-E order. GPU fields are optional.</p>
   <form id='form'>
     <label>Updated At
       <input name='updatedAt' placeholder='22:15:04'>
@@ -867,6 +1063,12 @@ pre{background:#0b1018;border:1px solid #263345;border-radius:12px;padding:12px;
     </label>
     <label>Memory percent
       <input name='memoryPercent' type='number' min='0' max='100' placeholder='77'>
+    </label>
+    <label>GPU text
+      <input name='gpuText' placeholder='Apple M2'>
+    </label>
+    <label>GPU percent
+      <input name='gpuPercent' type='number' min='0' max='100' placeholder='34'>
     </label>
     <label>Performance cores
       <input name='performanceCount' type='number' min='0' max='16' placeholder='4'>
@@ -903,6 +1105,8 @@ function syncForm(state){
   setValue('updatedAt', state && state.updatedAt ? state.updatedAt : '');
   setValue('memoryText', state && state.memoryText ? state.memoryText : '');
   setValue('memoryPercent', state ? state.memoryPercent : '');
+  setValue('gpuText', state && state.gpuText ? state.gpuText : '');
+  setValue('gpuPercent', state ? state.gpuPercent : '');
   setValue('performanceCount', state ? state.performanceCount : '');
   setValue('efficiencyCount', state ? state.efficiencyCount : '');
   setValue('coreLoads', state && Array.isArray(state.coreLoads) ? state.coreLoads.join(',') : '');
@@ -913,6 +1117,8 @@ function fillDemo(){
   setValue('updatedAt', stamp);
   setValue('memoryText', '12.3/16.0 GB');
   setValue('memoryPercent', 77);
+  setValue('gpuText', 'Apple GPU');
+  setValue('gpuPercent', 34);
   setValue('performanceCount', 4);
   setValue('efficiencyCount', 6);
   setValue('coreLoads', '41,55,38,67,12,14,9,11,8,7');
@@ -1070,6 +1276,24 @@ void handleStatsUpdate() {
     touched = true;
   }
 
+  if (server.hasArg("gpuText")) {
+    copyToBuffer(gpuText, sizeof(gpuText), server.arg("gpuText"));
+    touched = true;
+  }
+
+  if (server.hasArg("gpuPercent")) {
+    int parsedGpu = gpuPercent;
+    if (!parseIntClamped(server.arg("gpuPercent"), 0, 100, parsedGpu)) {
+      server.send(400, "application/json", "{\"error\":\"invalid_gpu_percent\"}");
+      return;
+    }
+    if (parsedGpu != gpuPercent) {
+      numericValuesChanged = true;
+    }
+    gpuPercent = parsedGpu;
+    touched = true;
+  }
+
   bool cpuArgPresent = server.hasArg("performanceCount") || server.hasArg("efficiencyCount") || server.hasArg("coreLoads");
   if (cpuArgPresent) {
     if (!server.hasArg("performanceCount") || !server.hasArg("efficiencyCount") || !server.hasArg("coreLoads")) {
@@ -1124,7 +1348,14 @@ void handleStatsUpdate() {
     return;
   }
 
-  hasUploadedData = (performanceCount + efficiencyCount) > 0 || memoryText[0] != 0 || updatedAt[0] != 0;
+  hasUploadedData =
+    (performanceCount + efficiencyCount) > 0 ||
+    memoryText[0] != 0 ||
+    gpuText[0] != 0 ||
+    updatedAt[0] != 0 ||
+    memoryPercent > 0 ||
+    gpuPercent > 0;
+
   updateCounter++;
   if (numericValuesChanged) {
     beginMetricsAnimation(now, previousTotalCores);
@@ -1202,7 +1433,7 @@ void setup() {
   tft.setRotation(0);
   tft.fillScreen(COLOR_BG);
   ensureLineSprite();
-  ensureMemoryRowSprite();
+  ensureGaugeSprite();
   syncDisplayedMetricsToTargets();
 
   String ssid, pass;

@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mac Stats v2 Preview</title>
+<style>
+:root{
+  --bg:#0d1118;
+  --panel:#101723;
+  --panel-2:#16202b;
+  --border:#2e3c49;
+  --text:#edf4ff;
+  --muted:#9fb4c5;
+  --accent:#9cf2ff;
+  --perf:#fc60;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:
+    radial-gradient(circle at top, #182331 0%, #0d1118 55%),
+    linear-gradient(180deg,#0f1520,#0a0e15);
+  color:var(--text);
+}
+.page{
+  max-width:1120px;
+  margin:0 auto;
+  padding:24px;
+}
+.hero{
+  display:flex;
+  gap:24px;
+  align-items:flex-start;
+  flex-wrap:wrap;
+}
+.left{
+  flex:0 0 320px;
+}
+.right{
+  flex:1 1 520px;
+  min-width:320px;
+}
+h1{
+  margin:0 0 8px;
+  font-size:24px;
+  line-height:1.1;
+}
+.sub{
+  margin:0 0 18px;
+  color:var(--muted);
+  line-height:1.45;
+  max-width:60ch;
+}
+.screen-wrap{
+  background:#0b0f15;
+  border:1px solid #28323d;
+  border-radius:24px;
+  padding:18px;
+  width:max-content;
+  box-shadow:0 20px 60px rgba(0,0,0,.35);
+}
+canvas{
+  width:240px;
+  height:240px;
+  display:block;
+  image-rendering:auto;
+  border-radius:18px;
+  background:#101b1f;
+}
+.toolbar{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin:14px 0 0;
+}
+button{
+  border:none;
+  border-radius:12px;
+  padding:10px 12px;
+  background:#213041;
+  color:var(--text);
+  cursor:pointer;
+  font-weight:600;
+}
+button.primary{
+  background:#9cf2ff;
+  color:#05212b;
+}
+button:hover{filter:brightness(1.06)}
+.panel{
+  background:rgba(15,22,32,.82);
+  border:1px solid #273443;
+  border-radius:18px;
+  padding:16px;
+  backdrop-filter:blur(12px);
+}
+.controls{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+.wide{
+  grid-column:1 / -1;
+}
+label{
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+input,textarea{
+  width:100%;
+  border:1px solid #324253;
+  border-radius:12px;
+  background:#0f1620;
+  color:var(--text);
+  padding:10px 12px;
+  font:inherit;
+}
+textarea{
+  min-height:88px;
+  resize:vertical;
+}
+.hint{
+  margin-top:10px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.45;
+}
+.json-row{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:10px;
+}
+@media (max-width:900px){
+  .hero{flex-direction:column}
+  .left,.right{min-width:0}
+}
+@media (max-width:640px){
+  .controls{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <div class="left">
+      <h1>Mac Stats v2 Preview</h1>
+      <p class="sub">
+        Local browser preview for the current <code>esp_mini_screen_mac_stats_v2</code> layout.
+        Open this file directly, tweak values, and the 240x240 canvas redraws immediately.
+      </p>
+      <div class="screen-wrap">
+        <canvas id="screen" width="240" height="240"></canvas>
+      </div>
+      <div class="toolbar">
+        <button class="primary" data-preset="eight">8 Cores</button>
+        <button class="primary" data-preset="ten">10 Cores</button>
+        <button class="primary" data-preset="twelve">12 Cores</button>
+        <button data-preset="waiting">Waiting</button>
+        <button id="randomize">Randomize</button>
+      </div>
+    </div>
+
+    <div class="right panel">
+      <div class="controls">
+        <div>
+          <label for="memoryText">Memory text</label>
+          <input id="memoryText" value="8.2/16.0 GB">
+        </div>
+        <div>
+          <label for="memoryPercent">Memory percent</label>
+          <input id="memoryPercent" type="number" min="0" max="100" value="52">
+        </div>
+
+        <div>
+          <label for="gpuText">GPU text</label>
+          <input id="gpuText" value="M2 10c">
+        </div>
+        <div>
+          <label for="gpuPercent">GPU percent</label>
+          <input id="gpuPercent" type="number" min="0" max="100" value="18">
+        </div>
+
+        <div>
+          <label for="performanceCount">Performance cores</label>
+          <input id="performanceCount" type="number" min="0" max="16" value="4">
+        </div>
+        <div>
+          <label for="efficiencyCount">Efficiency cores</label>
+          <input id="efficiencyCount" type="number" min="0" max="16" value="6">
+        </div>
+
+        <div class="wide">
+          <label for="coreLoads">Core loads CSV (P first, then E)</label>
+          <textarea id="coreLoads">62,48,71,39,18,22,14,27,11,8</textarea>
+        </div>
+
+        <div class="wide">
+          <label for="stateJson">Optional JSON state / payload paste</label>
+          <textarea id="stateJson" placeholder='{"memoryText":"8.2/16.0 GB","memoryPercent":52,"gpuText":"M2 10c","gpuPercent":18,"performanceCount":4,"efficiencyCount":6,"coreLoads":[62,48,71,39,18,22,14,27,11,8]}'></textarea>
+          <div class="json-row">
+            <button id="applyJson">Apply JSON</button>
+            <button id="copyJson">Copy JSON</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hint">
+        Preview mirrors the current sketch layout and proportions, but browser text metrics are only approximate compared to <code>TFT_eSPI</code>.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DISPLAY_SIZE = 240;
+const C = {
+  BG: "#080808",
+  PANEL: "#101410",
+  PANEL_ALT: "#181c18",
+  PANEL_STROKE: "#313431",
+  MUTED: "#7b797b",
+  TEXT: "#ffffff",
+  TRACK: "#202420",
+  PERF: "#ff8d00",
+  EFF: "#29d2ff",
+  RAM: "#83ceff",
+  GPU: "#52baff"
+};
+
+const L = {
+  TOP_Y: 8,
+  TOP_W: 74,
+  TOP_H: 76,
+  TOP_GAP: 4,
+  LEGEND_Y: 88,
+  GRID_Y: 100,
+  GRID_GAP: 4,
+  GRID_PAD_X: 8,
+  CONTENT_BOTTOM: 238
+};
+
+const screen = document.getElementById("screen");
+const ctx = screen.getContext("2d");
+
+const els = {
+  memoryText: document.getElementById("memoryText"),
+  memoryPercent: document.getElementById("memoryPercent"),
+  gpuText: document.getElementById("gpuText"),
+  gpuPercent: document.getElementById("gpuPercent"),
+  performanceCount: document.getElementById("performanceCount"),
+  efficiencyCount: document.getElementById("efficiencyCount"),
+  coreLoads: document.getElementById("coreLoads"),
+  stateJson: document.getElementById("stateJson")
+};
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function topStartX() {
+  return Math.floor((DISPLAY_SIZE - (L.TOP_W * 3 + L.TOP_GAP * 2)) / 2);
+}
+
+function legendYForLayout(layout) {
+  return Math.max(L.LEGEND_Y, layout.startY - 12);
+}
+
+function roundRect(x, y, width, height, radius, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, radius);
+  ctx.arcTo(x + width, y + height, x, y + height, radius);
+  ctx.arcTo(x, y + height, x, y, radius);
+  ctx.arcTo(x, y, x + width, y, radius);
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function setFont(size, weight = 400) {
+  ctx.font = `${weight} ${size}px Arial, sans-serif`;
+}
+
+function fitText(text, maxWidth, size, weight = 400) {
+  setFont(size, weight);
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let value = text;
+  while (value.length > 1) {
+    value = value.slice(0, -1);
+    const candidate = value + "...";
+    if (ctx.measureText(candidate).width <= maxWidth) return candidate;
+  }
+  return "...";
+}
+
+function compactMetricText(text) {
+  return String(text)
+    .trim()
+    .replace(".0/", "/")
+    .replace(".0 GB", " GB");
+}
+
+function drawCentered(text, x, y, size, color, weight = 400, maxWidth = null) {
+  const value = maxWidth ? fitText(text, maxWidth, size, weight) : text;
+  setFont(size, weight);
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(value, x, y);
+}
+
+function drawLeft(text, x, y, size, color, weight = 400, maxWidth = null) {
+  const value = maxWidth ? fitText(text, maxWidth, size, weight) : text;
+  setFont(size, weight);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(value, x, y);
+}
+
+function drawRing(cx, cy, radius, thickness, percent, accent) {
+  const p = clamp(percent, 0, 100);
+  ctx.beginPath();
+  ctx.strokeStyle = C.TRACK;
+  ctx.lineWidth = thickness;
+  ctx.lineCap = "round";
+  ctx.arc(cx, cy, radius, -Math.PI / 2, 1.5 * Math.PI);
+  ctx.stroke();
+
+  if (p <= 0) return;
+
+  const end = -Math.PI / 2 + (Math.PI * 2 * p) / 100;
+  ctx.beginPath();
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = thickness;
+  ctx.lineCap = "round";
+  ctx.arc(cx, cy, radius, -Math.PI / 2, end);
+  ctx.stroke();
+}
+
+function chooseCoreColumns(count) {
+  if (count <= 0) return 1;
+  if (count <= 4) return count;
+  if (count <= 8) return 4;
+  if (count <= 10) return 5;
+  return 4;
+}
+
+function buildCoreGridLayout(total) {
+  const columns = chooseCoreColumns(total);
+  const rows = total <= 0 ? 0 : Math.ceil(total / columns);
+  const availableWidth = DISPLAY_SIZE - L.GRID_PAD_X * 2;
+  const availableHeight = L.CONTENT_BOTTOM - L.GRID_Y;
+  const cellWidth = rows ? Math.floor((availableWidth - L.GRID_GAP * (columns - 1)) / columns) : 0;
+  let cellHeight = rows ? Math.floor((availableHeight - L.GRID_GAP * (rows - 1)) / rows) : 0;
+  if (cellHeight > cellWidth + 6) cellHeight = cellWidth + 6;
+  const totalHeight = rows ? rows * cellHeight + L.GRID_GAP * (rows - 1) : 0;
+  const startY = rows ? Math.max(L.GRID_Y, L.CONTENT_BOTTOM - totalHeight) : L.GRID_Y;
+  return { columns, rows, cellWidth, cellHeight, startX: L.GRID_PAD_X, startY };
+}
+
+function parseCoreLoads(raw) {
+  return String(raw)
+    .split(",")
+    .map(v => v.trim())
+    .filter(Boolean)
+    .map(v => clamp(parseInt(v, 10) || 0, 0, 100));
+}
+
+function normalizeState() {
+  const performanceCount = clamp(parseInt(els.performanceCount.value, 10) || 0, 0, 16);
+  const efficiencyCount = clamp(parseInt(els.efficiencyCount.value, 10) || 0, 0, 16);
+  const total = performanceCount + efficiencyCount;
+  const loads = parseCoreLoads(els.coreLoads.value).slice(0, total);
+  while (loads.length < total) loads.push(0);
+
+  const hasData = total > 0 ||
+    String(els.memoryText.value).trim() ||
+    String(els.gpuText.value).trim() ||
+    (parseInt(els.memoryPercent.value, 10) || 0) > 0 ||
+    (parseInt(els.gpuPercent.value, 10) || 0) > 0;
+
+  return {
+    memoryText: String(els.memoryText.value).trim(),
+    memoryPercent: clamp(parseInt(els.memoryPercent.value, 10) || 0, 0, 100),
+    gpuText: String(els.gpuText.value).trim(),
+    gpuPercent: clamp(parseInt(els.gpuPercent.value, 10) || 0, 0, 100),
+    performanceCount,
+    efficiencyCount,
+    coreLoads: loads,
+    hasData
+  };
+}
+
+function computeCpuAverage(state) {
+  if (!state.coreLoads.length) return 0;
+  const sum = state.coreLoads.reduce((a, b) => a + b, 0);
+  return Math.round(sum / state.coreLoads.length);
+}
+
+function drawGaugeCard(x, y, title, subtitle, percent, accent) {
+  roundRect(x, y, L.TOP_W, L.TOP_H, 14, C.PANEL, C.PANEL_STROKE);
+  const ringCy = y + 36;
+  drawCentered(title, x + L.TOP_W / 2, y + 6, 9, accent, 700, L.TOP_W - 16);
+  drawRing(x + L.TOP_W / 2, ringCy, 17, 1, percent, accent);
+  drawCentered(`${percent}%`, x + L.TOP_W / 2, ringCy - 4, 9, C.TEXT, 700);
+  drawCentered(subtitle, x + L.TOP_W / 2, y + L.TOP_H - 11, 8, C.MUTED, 400, L.TOP_W - 10);
+}
+
+function drawCoreLegend(state, layout) {
+  const legendY = legendYForLayout(layout);
+  drawLeft("CPU RINGS", 10, legendY, 8, C.MUTED, 400);
+
+  ctx.fillStyle = C.PERF;
+  ctx.beginPath();
+  ctx.arc(96, legendY + 4, 3, 0, Math.PI * 2);
+  ctx.fill();
+  drawLeft("P", 103, legendY, 8, C.MUTED);
+
+  ctx.fillStyle = C.EFF;
+  ctx.beginPath();
+  ctx.arc(122, legendY + 4, 3, 0, Math.PI * 2);
+  ctx.fill();
+  drawLeft("E", 129, legendY, 8, C.MUTED);
+
+  drawCentered(`${state.performanceCount}P/${state.efficiencyCount}E`, 210, legendY, 8, C.MUTED, 400, 54);
+}
+
+function drawCoreTile(x, y, width, height, prefix, index, load, accent) {
+  roundRect(x, y, width, height, 8, C.PANEL_ALT, C.PANEL_STROKE);
+
+  const ringRadius = Math.max(8, Math.min(Math.floor(width / 2 - 5), Math.floor(height / 2 - 10)));
+  const ringCx = x + Math.floor(width / 2);
+  const ringCy = y + Math.floor(height / 2) + 1;
+  drawRing(ringCx, ringCy, ringRadius, 1, load, accent);
+
+  drawLeft(`${prefix}${index + 1}`, x + 5, y + 5, 8, accent, 700, width - 10);
+
+  const value = `${load}%`;
+  drawCentered(value, ringCx, ringCy - 4, 8, C.TEXT, 700);
+}
+
+function drawWaitingState() {
+  const cardY = L.GRID_Y;
+  const cardH = DISPLAY_SIZE - L.GRID_Y - 8;
+  roundRect(12, cardY, DISPLAY_SIZE - 24, cardH, 14, C.PANEL, C.PANEL_STROKE);
+  drawCentered("Waiting for Mac sender", DISPLAY_SIZE / 2, cardY + 18, 8, C.MUTED, 400, DISPLAY_SIZE - 44);
+  drawCentered("POST /stats", DISPLAY_SIZE / 2, cardY + 42, 8, C.TEXT, 700, DISPLAY_SIZE - 44);
+  drawCentered("run local tools/send_mac_stats.py", DISPLAY_SIZE / 2, cardY + 72, 8, C.MUTED, 400, DISPLAY_SIZE - 44);
+}
+
+function drawPreview() {
+  const state = normalizeState();
+  ctx.clearRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+  ctx.fillStyle = C.BG;
+  ctx.fillRect(0, 0, DISPLAY_SIZE, DISPLAY_SIZE);
+
+  const leftX = topStartX();
+  const memorySubtitle = state.memoryText ? compactMetricText(state.memoryText) : "waiting";
+  drawGaugeCard(leftX, L.TOP_Y, "RAM", memorySubtitle, state.memoryPercent, C.RAM);
+  drawGaugeCard(leftX + L.TOP_W + L.TOP_GAP, L.TOP_Y, "CPU", state.coreLoads.length ? `${state.coreLoads.length} cores` : "idle", computeCpuAverage(state), C.PERF);
+  drawGaugeCard(leftX + (L.TOP_W + L.TOP_GAP) * 2, L.TOP_Y, "GPU", state.gpuText || (state.hasData ? "n/a" : "auto"), state.gpuPercent, C.GPU);
+
+  if (!state.hasData) {
+    drawWaitingState();
+    return;
+  }
+
+  const layout = buildCoreGridLayout(state.coreLoads.length);
+  drawCoreLegend(state, layout);
+  for (let index = 0; index < state.coreLoads.length; index++) {
+    const col = index % layout.columns;
+    const row = Math.floor(index / layout.columns);
+    const x = layout.startX + col * (layout.cellWidth + L.GRID_GAP);
+    const y = layout.startY + row * (layout.cellHeight + L.GRID_GAP);
+    const isPerf = index < state.performanceCount;
+    drawCoreTile(
+      x,
+      y,
+      layout.cellWidth,
+      layout.cellHeight,
+      isPerf ? "P" : "E",
+      isPerf ? index : index - state.performanceCount,
+      state.coreLoads[index],
+      isPerf ? C.PERF : C.EFF
+    );
+  }
+}
+
+function applyState(state) {
+  if ("memoryText" in state) els.memoryText.value = state.memoryText ?? "";
+  if ("memoryPercent" in state) els.memoryPercent.value = clamp(Number(state.memoryPercent) || 0, 0, 100);
+  if ("gpuText" in state) els.gpuText.value = state.gpuText ?? "";
+  if ("gpuPercent" in state) els.gpuPercent.value = clamp(Number(state.gpuPercent) || 0, 0, 100);
+  if ("performanceCount" in state) els.performanceCount.value = clamp(Number(state.performanceCount) || 0, 0, 16);
+  if ("efficiencyCount" in state) els.efficiencyCount.value = clamp(Number(state.efficiencyCount) || 0, 0, 16);
+  if ("coreLoads" in state) {
+    const loads = Array.isArray(state.coreLoads) ? state.coreLoads : parseCoreLoads(state.coreLoads);
+    els.coreLoads.value = loads.join(",");
+  }
+  drawPreview();
+}
+
+const presets = {
+  waiting: {
+    memoryText: "",
+    memoryPercent: 0,
+    gpuText: "",
+    gpuPercent: 0,
+    performanceCount: 0,
+    efficiencyCount: 0,
+    coreLoads: []
+  },
+  eight: {
+    memoryText: "8.2/16.0 GB",
+    memoryPercent: 52,
+    gpuText: "M2 10c",
+    gpuPercent: 12,
+    performanceCount: 4,
+    efficiencyCount: 4,
+    coreLoads: [33, 48, 41, 29, 12, 17, 8, 5]
+  },
+  ten: {
+    memoryText: "8.2/16.0 GB",
+    memoryPercent: 52,
+    gpuText: "M2 10c",
+    gpuPercent: 18,
+    performanceCount: 4,
+    efficiencyCount: 6,
+    coreLoads: [62, 48, 71, 39, 18, 22, 14, 27, 11, 8]
+  },
+  twelve: {
+    memoryText: "11.7/24.0 GB",
+    memoryPercent: 49,
+    gpuText: "M3 Pro 18c",
+    gpuPercent: 24,
+    performanceCount: 6,
+    efficiencyCount: 6,
+    coreLoads: [58, 44, 63, 51, 37, 33, 18, 14, 12, 9, 7, 5]
+  }
+};
+
+for (const key of Object.keys(els)) {
+  if (els[key].tagName === "TEXTAREA" || els[key].tagName === "INPUT") {
+    els[key].addEventListener("input", () => {
+      if (key !== "stateJson") drawPreview();
+    });
+  }
+}
+
+document.querySelectorAll("[data-preset]").forEach(btn => {
+  btn.addEventListener("click", () => applyState(presets[btn.dataset.preset]));
+});
+
+document.getElementById("randomize").addEventListener("click", () => {
+  const state = normalizeState();
+  const total = state.performanceCount + state.efficiencyCount;
+  const loads = Array.from({ length: total }, (_, index) => {
+    const base = index < state.performanceCount ? 28 : 8;
+    return clamp(Math.round(base + Math.random() * 55), 0, 100);
+  });
+  applyState({ ...state, coreLoads: loads, gpuPercent: clamp(Math.round(Math.random() * 55), 0, 100) });
+});
+
+document.getElementById("applyJson").addEventListener("click", () => {
+  try {
+    const parsed = JSON.parse(els.stateJson.value);
+    applyState(parsed);
+  } catch (error) {
+    alert("Invalid JSON");
+  }
+});
+
+document.getElementById("copyJson").addEventListener("click", async () => {
+  const state = normalizeState();
+  const payload = {
+    memoryText: state.memoryText,
+    memoryPercent: state.memoryPercent,
+    gpuText: state.gpuText,
+    gpuPercent: state.gpuPercent,
+    performanceCount: state.performanceCount,
+    efficiencyCount: state.efficiencyCount,
+    coreLoads: state.coreLoads
+  };
+  const text = JSON.stringify(payload, null, 2);
+  els.stateJson.value = text;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {}
+});
+
+applyState(presets.ten);
+</script>
+</body>
+</html>

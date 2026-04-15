@@ -1,6 +1,36 @@
 # esp-mini_screen
 
+`ESP8266` `ST7789` `WiFi` `Arduino` `macOS` `Camera` `Dashboards`
+
 Custom firmware for the cheap ESP12F-based smart WiFi weather station (~$20 on Amazon) with a 240x240 ST7789 TFT display.
+
+## Sketch Overview
+
+### esp_mini_screen_mac_stats
+
+Original Mac monitor sketch with RAM usage and per-core CPU bars grouped into `Performance` and `Efficiency` rows.
+
+<img src="esp_mini_screen_mac_stats/mac_monitor_on_device.jpg" alt="Mac stats v1 on device" width="420">
+
+### esp_mini_screen_mac_stats_v2
+
+Redesigned Mac monitor with circular `RAM` / `CPU` / `GPU` gauges on top and per-core rings below, styled closer to iStat Menus.
+
+<img src="esp_mini_screen_mac_stats_v2/mac_monitor_v2_on_device.jpg" alt="Mac stats v2 on device" width="420">
+
+### esp_mini_screen_limits
+
+Compact dashboard for daily/weekly `Codex` and `Claude` limits, updated over HTTP from macOS helper scripts.
+
+<img src="esp_mini_screen_limits/ai_limits_on_device.jpg" alt="AI limits sketch on device" width="420">
+
+### Other sketches
+
+- `esp_mini_screen_colors` - full-screen color test for verifying the TFT wiring and `User_Setup.h`
+- `esp_mini_screen_wifi` - WiFi provisioning with captive portal and EEPROM storage
+- `esp_mini_screen_camera` - live phone camera streaming over HTTPS to the TFT
+- `esp_mini_screen_image` - browser-based single image upload and display
+- `macos_ai_limits` - helper scripts for pushing local AI usage data to `esp_mini_screen_limits`
 
 ## Hardware
 
@@ -126,8 +156,6 @@ Uploads a single image from browser to TFT over WiFi. Includes built-in WiFi pro
 
 Displays remaining daily and weekly limits for two services (`Codex` and `Claude`) and exposes a small HTTP API for updating the screen from another machine.
 
-![AI Limits sketch on device](esp_mini_screen_limits/ai_limits_on_device.jpg)
-
 **How it works:**
 1. Device connects to WiFi (or starts AP for setup) and shows the dashboard on the TFT
 2. Open `http://<device-ip>` in browser to use the built-in test form
@@ -175,11 +203,13 @@ You do **not** need a separate macOS app for this. The included sender script is
 1. Device connects to WiFi (or starts AP for setup) and shows the dashboard on the TFT
 2. From the repository root, run the sender on your Mac:
    ```bash
-   python3 tools/send_mac_stats.py --device-url http://<device-ip> --interval 1
+   python3 esp_mini_screen_mac_stats/tools/send_mac_stats.py --device-url http://<device-ip> --interval 1
    ```
 3. The script samples per-core CPU load through macOS Mach APIs and RAM usage through `host_statistics64`
 4. On Apple Silicon it auto-detects `Performance` / `Efficiency` core counts via `sysctlbyname`
 5. The ESP receives the update on `POST /stats` and renders RAM + per-core bars
+
+The sender now also attempts to read GPU load through `ioreg` on Apple Silicon and will include optional `gpuText` / `gpuPercent` fields when available. The original `esp_mini_screen_mac_stats` sketch ignores those extra fields, so it keeps working unchanged.
 
 Useful sender flags:
 
@@ -187,6 +217,7 @@ Useful sender flags:
 - `--efficiency-cores 6`
 - `--cpu-order eff-first`
 - `--max-visible-cores 12`
+- `--no-gpu`
 - `--once --dry-run`
 
 `POST /stats` accepts `application/x-www-form-urlencoded` fields:
@@ -197,6 +228,8 @@ Useful sender flags:
 - `performanceCount`
 - `efficiencyCount`
 - `coreLoads` - comma-separated percentages in screen order (`P...` first, then `E...`)
+- `gpuText` - optional GPU label for sketches that support it
+- `gpuPercent` - optional GPU load percent for sketches that support it
 
 `performanceCount`, `efficiencyCount`, and `coreLoads` must be sent together in the same request. Memory fields can be updated independently.
 
@@ -207,10 +240,34 @@ curl -X POST "http://192.168.1.50/stats" \
   --data-urlencode "updatedAt=22:15:04" \
   --data-urlencode "memoryText=12.3/16.0 GB" \
   --data-urlencode "memoryPercent=77" \
+  --data-urlencode "gpuText=M2 10c" \
+  --data-urlencode "gpuPercent=34" \
   --data-urlencode "performanceCount=4" \
   --data-urlencode "efficiencyCount=6" \
   --data-urlencode "coreLoads=41,55,38,67,12,14,9,11,8,7"
 ```
+
+### esp_mini_screen_mac_stats_v2
+
+Alternative redesign of the Mac monitor sketch. It keeps the same WiFi setup and `POST /stats` API, but the dashboard is rebuilt around circular gauges:
+
+- top row: `RAM`, `CPU` average, and `GPU`
+- bottom grid: per-core circular indicators styled more like iStat Menus
+- `Performance` and `Efficiency` cores keep the same accent colors as the original sketch
+
+![Mac Monitor v2 sketch on device](esp_mini_screen_mac_stats_v2/mac_monitor_v2_on_device.jpg)
+
+The sender lives next to the sketch as a small wrapper, so from the repository root you can run:
+
+```bash
+python3 esp_mini_screen_mac_stats_v2/tools/send_mac_stats.py --device-url http://<device-ip> --interval 1
+```
+
+Files:
+
+- `esp_mini_screen_mac_stats_v2/esp_mini_screen_mac_stats_v2.ino` - the circular dashboard sketch
+- `esp_mini_screen_mac_stats_v2/tools/send_mac_stats.py` - local wrapper for the shared macOS sender
+- `esp_mini_screen_mac_stats_v2/tools/preview_mac_stats_v2.html` - browser-based 240x240 preview with editable CPU/RAM/GPU data and core-count presets
 
 ### macos_ai_limits
 

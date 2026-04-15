@@ -1,0 +1,101 @@
+<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="240" height="240" rx="20" fill="#101B1F"/>
+
+  <style>
+    .panel { fill:#1A2730; stroke:#31424B; stroke-width:1; }
+    .tile { fill:#20303A; stroke:#31424B; stroke-width:1; }
+    .label { fill:#9EB4C1; font-family:Arial, sans-serif; font-size:8px; }
+    .title { font-family:Arial, sans-serif; font-size:9px; font-weight:700; }
+    .value { fill:#F7FBFF; font-family:Arial, sans-serif; font-size:10px; font-weight:700; }
+    .tiny { fill:#9EB4C1; font-family:Arial, sans-serif; font-size:7px; }
+    .track { stroke:#28353D; stroke-linecap:round; fill:none; }
+    .ring { stroke-linecap:round; fill:none; }
+  </style>
+
+  <rect class="panel" x="6" y="6" width="72" height="66" rx="14"/>
+  <text class="title" x="42" y="17" text-anchor="middle" fill="#A5A1FF">RAM</text>
+  <circle class="track" cx="42" cy="34" r="18" stroke-width="3"/>
+  <circle class="ring" cx="42" cy="34" r="18" stroke="#A5A1FF" stroke-width="3" pathLength="100" stroke-dasharray="52 100" transform="rotate(-90 42 34)"/>
+  <text class="value" x="42" y="38" text-anchor="middle">52%</text>
+  <text class="tiny" x="42" y="60" text-anchor="middle">8.2 / 16 GB</text>
+
+  <rect class="panel" x="84" y="6" width="72" height="66" rx="14"/>
+  <text class="title" x="120" y="17" text-anchor="middle" fill="#FF9A3C">CPU</text>
+  <circle class="track" cx="120" cy="34" r="18" stroke-width="3"/>
+  <circle class="ring" cx="120" cy="34" r="18" stroke="#FF9A3C" stroke-width="3" pathLength="100" stroke-dasharray="43 100" transform="rotate(-90 120 34)"/>
+  <text class="value" x="120" y="38" text-anchor="middle">43%</text>
+  <text class="tiny" x="120" y="60" text-anchor="middle">10 cores</text>
+
+  <rect class="panel" x="162" y="6" width="72" height="66" rx="14"/>
+  <text class="title" x="198" y="17" text-anchor="middle" fill="#63E6D6">GPU</text>
+  <circle class="track" cx="198" cy="34" r="18" stroke-width="3"/>
+  <circle class="ring" cx="198" cy="34" r="18" stroke="#63E6D6" stroke-width="3" pathLength="100" stroke-dasharray="18 100" transform="rotate(-90 198 34)"/>
+  <text class="value" x="198" y="38" text-anchor="middle">18%</text>
+  <text class="tiny" x="198" y="60" text-anchor="middle">M2 10c</text>
+
+  <circle cx="82" cy="82" r="3" fill="#FF9A3C"/>
+  <text class="label" x="89" y="85">P</text>
+  <circle cx="100" cy="82" r="3" fill="#31D29D"/>
+  <text class="label" x="107" y="85">E</text>
+  <text class="label" x="198" y="85" text-anchor="end">4P / 6E</text>
+
+  <rect class="tile" x="8" y="90" width="41" height="71" rx="8"/>
+  <circle class="track" cx="28.5" cy="114" r="9" stroke-width="2"/>
+  <circle class="ring" cx="28.5" cy="114" r="9" stroke="#FF9A3C" stroke-width="2" pathLength="100" stroke-dasharray="62 100" transform="rotate(-90 28.5 114)"/>
+  <text class="label" x="28.5" y="141" text-anchor="middle">P1</text>
+  <text class="tiny" x="28.5" y="151" text-anchor="middle">62%</text>
+
+  <rect class="tile" x="53" y="90" width="41" height="71" rx="8"/>
+  <circle class="track" cx="73.5" cy="114" r="9" stroke-width="2"/>
+  <circle class="ring" cx="73.5" cy="114" r="9" stroke="#FF9A3C" stroke-width="2" pathLength="100" stroke-dasharray="48 100" transform="rotate(-90 73.5 114)"/>
+  <text class="label" x="73.5" y="141" text-anchor="middle">P2</text>
+  <text class="tiny" x="73.5" y="151" text-anchor="middle">48%</text>
+
+  <rect class="tile" x="98" y="90" width="41" height="71" rx="8"/>
+  <circle class="track" cx="118.5" cy="114" r="9" stroke-width="2"/>
+  <circle class="ring" cx="118.5" cy="114" r="9" stroke="#FF9A3C" stroke-width="2" pathLength="100" stroke-dasharray="71 100" transform="rotate(-90 118.5 114)"/>
+  <text class="label" x="118.5" y="141" text-anchor="middle">P3</text>
+  <text class="tiny" x="118.5" y="151" text-anchor="middle">71%</text>
+
+  <rect class="tile" x="143" y="90" width="41" height="71" rx="8"/>
+  <circle class="track" cx="163.5" cy="114" r="9" stroke-width="2"/>
+  <circle class="ring" cx="163.5" cy="114" r="9" stroke="#FF9A3C" stroke-width="2" pathLength="100" stroke-dasharray="39 100" transform="rotate(-90 163.5 114)"/>
+  <text class="label" x="163.5" y="141" text-anchor="middle">P4</text>
+  <text class="tiny" x="163.5" y="151" text-anchor="middle">39%</text>
+
+  <rect class="tile" x="188" y="90" width="41" height="71" rx="8"/>
+  <circle class="track" cx="208.5" cy="114" r="9" stroke-width="2"/>
+  <circle class="ring" cx="208.5" cy="114" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="18 100" transform="rotate(-90 208.5 114)"/>
+  <text class="label" x="208.5" y="141" text-anchor="middle">E1</text>
+  <text class="tiny" x="208.5" y="151" text-anchor="middle">18%</text>
+
+  <rect class="tile" x="8" y="165" width="41" height="71" rx="8"/>
+  <circle class="track" cx="28.5" cy="189" r="9" stroke-width="2"/>
+  <circle class="ring" cx="28.5" cy="189" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="22 100" transform="rotate(-90 28.5 189)"/>
+  <text class="label" x="28.5" y="216" text-anchor="middle">E2</text>
+  <text class="tiny" x="28.5" y="226" text-anchor="middle">22%</text>
+
+  <rect class="tile" x="53" y="165" width="41" height="71" rx="8"/>
+  <circle class="track" cx="73.5" cy="189" r="9" stroke-width="2"/>
+  <circle class="ring" cx="73.5" cy="189" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="14 100" transform="rotate(-90 73.5 189)"/>
+  <text class="label" x="73.5" y="216" text-anchor="middle">E3</text>
+  <text class="tiny" x="73.5" y="226" text-anchor="middle">14%</text>
+
+  <rect class="tile" x="98" y="165" width="41" height="71" rx="8"/>
+  <circle class="track" cx="118.5" cy="189" r="9" stroke-width="2"/>
+  <circle class="ring" cx="118.5" cy="189" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="27 100" transform="rotate(-90 118.5 189)"/>
+  <text class="label" x="118.5" y="216" text-anchor="middle">E4</text>
+  <text class="tiny" x="118.5" y="226" text-anchor="middle">27%</text>
+
+  <rect class="tile" x="143" y="165" width="41" height="71" rx="8"/>
+  <circle class="track" cx="163.5" cy="189" r="9" stroke-width="2"/>
+  <circle class="ring" cx="163.5" cy="189" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="11 100" transform="rotate(-90 163.5 189)"/>
+  <text class="label" x="163.5" y="216" text-anchor="middle">E5</text>
+  <text class="tiny" x="163.5" y="226" text-anchor="middle">11%</text>
+
+  <rect class="tile" x="188" y="165" width="41" height="71" rx="8"/>
+  <circle class="track" cx="208.5" cy="189" r="9" stroke-width="2"/>
+  <circle class="ring" cx="208.5" cy="189" r="9" stroke="#31D29D" stroke-width="2" pathLength="100" stroke-dasharray="8 100" transform="rotate(-90 208.5 189)"/>
+  <text class="label" x="208.5" y="216" text-anchor="middle">E6</text>
+  <text class="tiny" x="208.5" y="226" text-anchor="middle">8%</text>
+</svg>
