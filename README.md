@@ -24,6 +24,14 @@ Compact dashboard for daily/weekly `Codex` and `Claude` limits, updated over HTT
 
 <img src="esp_mini_screen_limits/ai_limits_on_device.jpg" alt="AI limits sketch on device" width="420">
 
+### esp_mini_screen_notifications
+
+Notification overlay sketch with an idle `clock + weather` dashboard underneath, plus slide-in / slide-out app cards over HTTP.
+
+Currently `work in progress`: the device-side sketch is usable, but there is no companion desktop/mobile app yet.
+
+<img src="esp_mini_screen_notifications/media/notifications_idle_stage.jpg" alt="Notifications sketch idle clock and weather screen" width="420">
+
 ### Other sketches
 
 - `esp_mini_screen_colors` - full-screen color test for verifying the TFT wiring and `User_Setup.h`
@@ -268,6 +276,126 @@ Files:
 - `esp_mini_screen_mac_stats_v2/esp_mini_screen_mac_stats_v2.ino` - the circular dashboard sketch
 - `esp_mini_screen_mac_stats_v2/tools/send_mac_stats.py` - local wrapper for the shared macOS sender
 - `esp_mini_screen_mac_stats_v2/tools/preview_mac_stats_v2.html` - browser-based 240x240 preview with editable CPU/RAM/GPU data and core-count presets
+
+### esp_mini_screen_notifications
+
+Shows the latest notification from an app on the TFT as a compact card with:
+
+- app name
+- sender/source
+- title
+- multi-line body text
+- optional timestamp text
+- auto-hide after about 10 seconds with slide-in / slide-out animation
+- idle dashboard with internet-synced clock, seconds, optional 12h/24h mode, and weather
+- current temperature and humidity plus a compact 2-day forecast
+- web-configurable backlight brightness with manual and day/night scheduled modes
+
+Status: this sketch is still in active development. The firmware and test sender are here already, but there is no polished companion app yet for capturing and forwarding real system notifications automatically.
+
+Animation preview:
+
+<img src="esp_mini_screen_notifications/media/notifications_flow.gif" alt="Notifications sketch animation preview" width="420">
+
+On-device stages:
+
+| Idle clock + weather | Notification sliding in | Full notification card |
+|---|---|---|
+| ![Idle stage](esp_mini_screen_notifications/media/notifications_idle_stage.jpg) | ![Slide-in stage](esp_mini_screen_notifications/media/notifications_slide_in_stage.jpg) | ![Full card stage](esp_mini_screen_notifications/media/notifications_card_stage.jpg) |
+
+The sketch itself is generic. It does not depend on Telegram specifically; Telegram, Mail, GitHub, or any other app can feed it as long as some local helper sends `POST /notify`.
+
+From the repository root you can push a test notification with:
+
+```bash
+python3 esp_mini_screen_notifications/tools/send_test_notification.py \
+  --device-url http://<device-ip> \
+  --demo telegram
+```
+
+Files:
+
+- `esp_mini_screen_notifications/esp_mini_screen_notifications.ino` - the TFT notification sketch
+- `esp_mini_screen_notifications/tools/send_test_notification.py` - small local helper for test notifications and quick demos
+- `esp_mini_screen_notifications/media/` - on-device screenshots and animation preview used in this README
+
+HTTP API:
+
+- `POST /notify`
+- `POST /clear`
+- `GET /state`
+- `POST /settings`
+- `POST /weather/refresh`
+
+`POST /notify` accepts `application/x-www-form-urlencoded` fields:
+
+- `app`
+- `sender`
+- `title`
+- `body`
+- `updatedAt` - optional display-only timestamp text
+
+`POST /settings` accepts:
+
+- `brightnessMode` - `manual` or `schedule`
+- `manualBrightness` - `0..100`
+- `dayBrightness` - `0..100`
+- `nightBrightness` - `0..100`
+- `dayStart` - `HH:MM`
+- `nightStart` - `HH:MM`
+- `timezoneOffsetMinutes` - browser/local UTC offset in minutes
+- `clockFormat` - `24h` or `12h`
+- `weatherEnabled` - `true` or `false`
+- `weatherCity` - city name used for geocoding
+- `weatherRefreshMinutes` - refresh interval in minutes
+- `weatherToken` - optional, currently unused with Open-Meteo
+
+Example:
+
+```bash
+curl -X POST "http://192.168.1.50/notify" \
+  --data-urlencode "app=Telegram" \
+  --data-urlencode "sender=Alice" \
+  --data-urlencode "title=New message" \
+  --data-urlencode "body=Hey, the notification sketch is live. Can you check the device?" \
+  --data-urlencode "updatedAt=10:42:15"
+```
+
+To clear the current card:
+
+```bash
+curl -X POST "http://192.168.1.50/clear"
+```
+
+To switch the backlight to scheduled day/night mode:
+
+```bash
+curl -X POST "http://192.168.1.50/settings" \
+  --data-urlencode "brightnessMode=schedule" \
+  --data-urlencode "dayBrightness=90" \
+  --data-urlencode "nightBrightness=12" \
+  --data-urlencode "dayStart=08:00" \
+  --data-urlencode "nightStart=22:30" \
+  --data-urlencode "timezoneOffsetMinutes=120"
+```
+
+To enable the idle clock + weather dashboard:
+
+```bash
+curl -X POST "http://192.168.1.50/settings" \
+  --data-urlencode "clockFormat=24h" \
+  --data-urlencode "weatherEnabled=true" \
+  --data-urlencode "weatherCity=Warsaw" \
+  --data-urlencode "weatherRefreshMinutes=30" \
+  --data-urlencode "timezoneOffsetMinutes=120"
+```
+
+The sketch currently uses [Open-Meteo Weather Forecast API](https://open-meteo.com/en/docs) and [Open-Meteo Geocoding API](https://open-meteo.com/en/docs/geocoding-api). The chosen provider is free for this use case and does not require an API key, so the token field is only kept as a future-proof setting.
+
+Current limitations:
+
+- no companion app yet for macOS/iPhone/Android; notifications are currently sent through the included test helper or your own local bridge
+- real capture from macOS Notification Center or Telegram Desktop is still a separate bridge task; this sketch already provides the device-side API and test sender for it
 
 ### macos_ai_limits
 
