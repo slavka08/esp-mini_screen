@@ -30,7 +30,7 @@ Notification overlay sketch with an idle `clock + weather` dashboard underneath,
 
 Currently `work in progress`: the device-side sketch is usable, but there is no companion desktop/mobile app yet.
 
-<img src="esp_mini_screen_notifications/media/notifications_idle_stage.jpg" alt="Notifications sketch idle clock and weather screen" width="420">
+<img src="esp_mini_screen_notifications/media/notifications_flow.gif" alt="Notifications sketch animation preview" width="420">
 
 ### Other sketches
 
