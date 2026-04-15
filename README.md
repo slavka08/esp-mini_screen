@@ -305,6 +305,15 @@ On-device stages:
 
 The sketch itself is generic. It does not depend on Telegram specifically; Telegram, Mail, GitHub, or any other app can feed it as long as some local helper sends `POST /notify`.
 
+Built-in web interface:
+
+1. Open `http://<device-ip>` in a browser
+2. Use the notification form to send test cards without `curl`
+3. Use the same page to change backlight, day/night schedule, clock format, city, and weather refresh settings
+4. Use the refresh buttons there to inspect current state or trigger a weather refresh
+
+`curl` examples below are optional; they document the raw HTTP API and are useful if you want to script updates from your own helper.
+
 From the repository root you can push a test notification with:
 
 ```bash
