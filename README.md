@@ -32,6 +32,10 @@ Currently `work in progress`: the device-side sketch is usable, but there is no 
 
 <img src="esp_mini_screen_notifications/media/notifications_flow.gif" alt="Notifications sketch animation preview" width="420">
 
+| Idle clock + weather | Notification sliding in | Full notification card |
+|---|---|---|
+| ![Idle stage](esp_mini_screen_notifications/media/notifications_idle_stage.jpg) | ![Slide-in stage](esp_mini_screen_notifications/media/notifications_slide_in_stage.jpg) | ![Full card stage](esp_mini_screen_notifications/media/notifications_card_stage.jpg) |
+
 ### Other sketches
 
 - `esp_mini_screen_colors` - full-screen color test for verifying the TFT wiring and `User_Setup.h`
