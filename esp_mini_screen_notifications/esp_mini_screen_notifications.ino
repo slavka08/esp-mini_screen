@@ -46,9 +46,9 @@
 #define DASHBOARD_CARD_HIDDEN_X DISPLAY_SIZE
 
 // --- Notification animation ---
-#define NOTIFICATION_TOTAL_MS   10000UL
-#define NOTIFICATION_ENTER_MS   1200UL
-#define NOTIFICATION_EXIT_MS    1200UL
+#define NOTIFICATION_TOTAL_MS   5000UL
+#define NOTIFICATION_ENTER_MS   800UL
+#define NOTIFICATION_EXIT_MS    800UL
 #define NOTIFICATION_VISIBLE_MS (NOTIFICATION_TOTAL_MS - NOTIFICATION_ENTER_MS - NOTIFICATION_EXIT_MS)
 #define NOTIFICATION_FRAME_MS   33UL
 
@@ -82,7 +82,7 @@
 #define MAX_WEATHER_REFRESH_MIN     240
 #define WEATHER_FETCH_TIMEOUT_MS    12000
 #define IDLE_CLOCK_REFRESH_MS       250UL
-#define IDLE_INFO_ROTATE_MS         3200UL
+#define IDLE_INFO_ROTATE_MS         7000UL
 
 #define WEATHER_CITY_LEN            48
 #define WEATHER_TOKEN_LEN           48
@@ -101,7 +101,7 @@
 #define IDLE_WEATHER_PANEL_Y        102
 #define IDLE_WEATHER_PANEL_W        220
 #define IDLE_WEATHER_PANEL_H        128
-#define IDLE_TOP_REGION_H           152
+#define IDLE_TOP_REGION_H           144
 #define IDLE_BOTTOM_REGION_Y        IDLE_TOP_REGION_H
 #define IDLE_BOTTOM_REGION_H        (DISPLAY_SIZE - IDLE_TOP_REGION_H)
 
@@ -122,9 +122,9 @@ const uint16_t COLOR_DISCORD = 0x7B5D;
 const uint16_t COLOR_GITHUB = 0xC618;
 const uint16_t COLOR_IDLE_BG = TFT_BLACK;
 const uint16_t COLOR_IDLE_CITY = 0xBFF0;
-const uint16_t COLOR_IDLE_HOURS = 0xFEC0;
-const uint16_t COLOR_IDLE_MINUTES = 0xFA28;
-const uint16_t COLOR_IDLE_SECONDS = 0x2D9F;
+const uint16_t COLOR_IDLE_HOURS = TFT_WHITE;//0xFEC0;
+const uint16_t COLOR_IDLE_MINUTES = TFT_WHITE;//0xFA28;
+const uint16_t COLOR_IDLE_SECONDS = TFT_WHITE;//0x2D9F;
 const uint16_t COLOR_IDLE_TEMP = 0xFD20;
 const uint16_t COLOR_IDLE_HUMIDITY = 0x55DF;
 const uint16_t COLOR_IDLE_PILL_BG = 0xE79B;
@@ -1822,14 +1822,27 @@ void drawIdleStarOn(Surface& surface, int x, int y, uint16_t color) {
 template <typename Surface>
 void drawIdleSunOn(Surface& surface, int cx, int cy, uint16_t color) {
   surface.fillCircle(cx, cy, 10, color);
-  for (int i = -14; i <= 14; i += 7) {
-    if (i == 0)
-      continue;
-    surface.drawLine(cx + i, cy - 16, cx + i / 2, cy - 11, color);
-    surface.drawLine(cx + i, cy + 16, cx + i / 2, cy + 11, color);
-    surface.drawLine(cx - 16, cy + i, cx - 11, cy + i / 2, color);
-    surface.drawLine(cx + 16, cy + i, cx + 11, cy + i / 2, color);
-  }
+  surface.drawLine(cx, cy - 20, cx, cy - 14, color);
+  surface.drawLine(cx, cy + 14, cx, cy + 20, color);
+  surface.drawLine(cx - 20, cy, cx - 14, cy, color);
+  surface.drawLine(cx + 14, cy, cx + 20, cy, color);
+  surface.drawLine(cx - 15, cy - 15, cx - 11, cy - 11, color);
+  surface.drawLine(cx + 11, cy - 11, cx + 15, cy - 15, color);
+  surface.drawLine(cx - 15, cy + 15, cx - 11, cy + 11, color);
+  surface.drawLine(cx + 11, cy + 11, cx + 15, cy + 15, color);
+}
+
+template <typename Surface>
+void drawIdleCompactSunOn(Surface& surface, int cx, int cy, uint16_t color) {
+  surface.fillCircle(cx, cy, 6, color);
+  surface.drawLine(cx, cy - 11, cx, cy - 8, color);
+  surface.drawLine(cx, cy + 8, cx, cy + 11, color);
+  surface.drawLine(cx - 11, cy, cx - 8, cy, color);
+  surface.drawLine(cx + 8, cy, cx + 11, cy, color);
+  surface.drawLine(cx - 8, cy - 8, cx - 6, cy - 6, color);
+  surface.drawLine(cx + 6, cy - 6, cx + 8, cy - 8, color);
+  surface.drawLine(cx - 8, cy + 8, cx - 6, cy + 6, color);
+  surface.drawLine(cx + 6, cy + 6, cx + 8, cy + 8, color);
 }
 
 template <typename Surface>
@@ -1866,11 +1879,7 @@ void drawIdleWeatherIconOn(Surface& surface, int cx, int cy, int weatherCode, bo
         surface.fillCircle(cx + 3, cy - 2, 6, bgColor);
         drawIdleStarOn(surface, cx + 8, cy - 6, TFT_WHITE);
       } else {
-        surface.fillCircle(cx, cy, 6, accent);
-        surface.drawLine(cx - 9, cy, cx - 6, cy, accent);
-        surface.drawLine(cx + 6, cy, cx + 9, cy, accent);
-        surface.drawLine(cx, cy - 9, cx, cy - 6, accent);
-        surface.drawLine(cx, cy + 6, cx, cy + 9, accent);
+        drawIdleCompactSunOn(surface, cx, cy, accent);
       }
       return;
     }
@@ -2018,7 +2027,6 @@ void drawIdleForecastChipOn(Surface& surface, int x, int y, int w, int h, const 
   const uint16_t accent = day.valid ? idleAccentForWeatherCode(day.weatherCode) : COLOR_IDLE_DIVIDER;
   surface.fillRoundRect(x, y, w, h, 10, COLOR_IDLE_CHIP);
   surface.drawRoundRect(x, y, w, h, 10, accent);
-  surface.fillRoundRect(x + 5, y + 5, w - 10, 4, 2, accent);
 
   surface.setTextSize(1);
   if (!day.valid) {
@@ -2031,18 +2039,31 @@ void drawIdleForecastChipOn(Surface& surface, int x, int y, int w, int h, const 
   String label = fitTextOn(surface, day.label, w - 12);
   surface.setTextColor(accent, COLOR_IDLE_CHIP);
   int labelWidth = surface.textWidth(label);
-  surface.setCursor(x + (w - labelWidth) / 2, y + 12);
+  surface.setCursor(x + (w - labelWidth) / 2, y + 7);
   surface.print(label);
 
-  drawIdleWeatherIconOn(surface, x + w / 2, y + 28, day.weatherCode, idleVisualUsesNightPalette(), COLOR_IDLE_CHIP, true);
+  drawIdleWeatherIconOn(surface, x + w / 2, y + 32, day.weatherCode, idleVisualUsesNightPalette(), COLOR_IDLE_CHIP, true);
 
-  String range = String(day.maxTempC) + "/" + String(day.minTempC) + "C";
-  surface.setTextSize(1);
+  String maxNumber = String(day.maxTempC);
+  String minText = String(day.minTempC) + "C";
+  surface.setTextSize(2);
   surface.setTextColor(COLOR_TEXT, COLOR_IDLE_CHIP);
-  range = fitTextOn(surface, range.c_str(), w - 12);
-  int rangeWidth = surface.textWidth(range);
-  surface.setCursor(x + (w - rangeWidth) / 2, y + h - 12);
-  surface.print(range);
+  int maxNumberWidth = surface.textWidth(maxNumber);
+  surface.setTextSize(1);
+  int maxUnitWidth = surface.textWidth("C");
+  int maxWidth = maxNumberWidth + maxUnitWidth + 1;
+  int maxX = x + (w - maxWidth) / 2;
+  surface.setTextSize(2);
+  surface.setCursor(maxX, y + h - 33);
+  surface.print(maxNumber);
+  surface.setTextSize(1);
+  surface.setCursor(maxX + maxNumberWidth + 1, y + h - 28);
+  surface.print("C");
+  surface.setTextSize(1);
+  int minWidth = surface.textWidth(minText);
+  surface.setTextColor(0xBDF7, COLOR_IDLE_CHIP);
+  surface.setCursor(x + (w - minWidth) / 2, y + h - 13);
+  surface.print(minText);
 }
 
 template <typename Surface>
@@ -2074,52 +2095,85 @@ void drawIdleClockPanelOn(Surface& surface, int offsetY) {
   surface.setCursor(14, offsetY + 34);
   surface.print(fitTextOn(surface, infoLine.c_str(), 122));
 
+  surface.setTextSize(5);
+  int hoursWidth = surface.textWidth(hoursText);
+  int minutesWidth = surface.textWidth(minutesText);
+  surface.setTextSize(5);
+  int colonWidth = surface.textWidth(":");
+  surface.setTextSize(2);
+  int dotWidth = surface.textWidth(".");
+  surface.setTextSize(3);
+  int secondsWidth = surface.textWidth(secondsText);
+
+  const int gapLarge = 0;
+  const int gapSmall = 1;
+  int timeWidth = hoursWidth + colonWidth + minutesWidth + dotWidth + secondsWidth + gapLarge * 2 + gapSmall * 2;
+  int hoursX = (DISPLAY_SIZE - timeWidth) / 2;
+  if (hoursX < 8)
+    hoursX = 8;
+  const int timeBottom = offsetY + 114;
+  const int digitTop = timeBottom - 40;
+  const int secondsTop = timeBottom - 24;
+  const int dotTop = timeBottom - 16;
+
+  surface.setTextSize(5);
+  surface.setTextColor(COLOR_IDLE_HOURS, COLOR_IDLE_BG);
+  surface.setCursor(hoursX, digitTop);
+  surface.print(hoursText);
+
+  surface.setTextSize(5);
+  int colonX = hoursX + hoursWidth + gapLarge;
+  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
+  surface.setCursor(colonX, digitTop);
+  surface.print(":");
+
+  surface.setTextSize(5);
+  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
+  int minutesX = colonX + colonWidth + gapLarge;
+  surface.setCursor(minutesX, digitTop);
+  surface.print(minutesText);
+
+  surface.setTextSize(3);
+  surface.setTextColor(COLOR_IDLE_SECONDS, COLOR_IDLE_BG);
+  int dotX = minutesX + minutesWidth + gapSmall;
+  surface.setTextSize(2);
+  surface.setCursor(dotX, dotTop);
+  surface.print(".");
+
+  surface.setTextSize(3);
+  int secondsX = dotX + dotWidth + gapSmall;
+  surface.setCursor(secondsX, secondsTop);
+  surface.print(secondsText);
+
+  if (suffixText[0]) {
+    surface.setTextSize(2);
+    surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
+    int suffixWidth = surface.textWidth(suffixText);
+    int suffixX = secondsX + (secondsWidth / 2) - (suffixWidth / 2);
+    surface.setCursor(suffixX, offsetY + 72);
+    surface.print(suffixText);
+  }
+
   surface.setTextSize(1);
   String pillText = idleWeatherIsReady() ? String(weatherState.condition) : (weatherSettings.enabled ? String("Weather") : String("Clock"));
   pillText = fitTextOn(surface, pillText.c_str(), 56);
   int pillWidth = surface.textWidth(pillText) + 16;
   if (pillWidth < 48)
     pillWidth = 48;
-  int pillCenterX = 190;
+  int pillCenterX = 206;
   int pillX = pillCenterX - pillWidth / 2;
-  if (pillX < 148)
-    pillX = 148;
-  if (pillX + pillWidth > DISPLAY_SIZE - 10)
-    pillX = DISPLAY_SIZE - 10 - pillWidth;
+  if (pillX < 154)
+    pillX = 154;
+  if (pillX + pillWidth > DISPLAY_SIZE - 8)
+    pillX = DISPLAY_SIZE - 8 - pillWidth;
   int iconCenterX = pillX + pillWidth / 2;
-  drawIdleWeatherIconOn(surface, iconCenterX, offsetY + 30, weatherState.weatherCode, night);
-  drawIdleStatusPillOn(surface, pillX, offsetY + 54, pillText);
-
-  surface.setTextSize(6);
-  surface.setTextColor(COLOR_IDLE_HOURS, COLOR_IDLE_BG);
-  int hoursWidth = surface.textWidth(hoursText);
-  int digitTop = offsetY + 66;
-  int hoursX = 10;
-  surface.setCursor(hoursX, digitTop);
-  surface.print(hoursText);
-
-  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
-  int minutesX = hoursX + hoursWidth + 8;
-  surface.setCursor(minutesX, digitTop);
-  surface.print(minutesText);
-
-  surface.setTextSize(3);
-  surface.setTextColor(COLOR_IDLE_SECONDS, COLOR_IDLE_BG);
-  int secondsX = 179;
-  surface.setCursor(secondsX, offsetY + 90);
-  surface.print(secondsText);
-
-  if (suffixText[0]) {
-    surface.setTextSize(1);
-    surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
-    surface.setCursor(secondsX + 2, offsetY + 80);
-    surface.print(suffixText);
-  }
+  drawIdleWeatherIconOn(surface, iconCenterX, offsetY + 24, weatherState.weatherCode, night);
+  drawIdleStatusPillOn(surface, pillX, offsetY + 49, pillText);
 
   surface.setTextSize(2);
-  surface.setTextColor(COLOR_TEXT, COLOR_IDLE_BG);
+  surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
   int16_t dateWidth = surface.textWidth(dateLine);
-  surface.setCursor((DISPLAY_SIZE - dateWidth) / 2, offsetY + 128);
+  surface.setCursor((DISPLAY_SIZE - dateWidth) / 2, offsetY + 118);
   surface.print(dateLine);
 }
 
@@ -2167,11 +2221,11 @@ void drawIdleWeatherPanelOn(Surface& surface, int offsetY) {
 
   int tempFill = clampInt((weatherState.temperatureC + 10) * 100 / 45, 0, 100);
   int humidityFill = clampInt(weatherState.humidity, 0, 100);
-  drawIdleMetricRowOn(surface, 14, baseY + 18, 96, false, "TEMP", String(weatherState.temperatureC) + "C", COLOR_IDLE_TEMP, tempFill);
-  drawIdleMetricRowOn(surface, 14, baseY + 46, 96, true, "HUM", String(weatherState.humidity) + "%", COLOR_IDLE_HUMIDITY, humidityFill);
+  drawIdleMetricRowOn(surface, 10, baseY + 25, 92, false, "TEMP", String(weatherState.temperatureC) + "C", COLOR_IDLE_TEMP, tempFill);
+  drawIdleMetricRowOn(surface, 10, baseY + 53, 92, true, "HUM", String(weatherState.humidity) + "%", COLOR_IDLE_HUMIDITY, humidityFill);
 
-  drawIdleForecastChipOn(surface, 118, baseY + 14, 52, 64, weatherState.forecast[0]);
-  drawIdleForecastChipOn(surface, 174, baseY + 14, 52, 64, weatherState.forecast[1]);
+  drawIdleForecastChipOn(surface, 108, baseY + 8, 60, 82, weatherState.forecast[0]);
+  drawIdleForecastChipOn(surface, 172, baseY + 8, 60, 82, weatherState.forecast[1]);
 }
 
 void drawIdleClockPanel() {
