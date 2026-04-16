@@ -1,8 +1,10 @@
 # esp-mini_screen
 
-`ESP8266` `ST7789` `WiFi` `Arduino` `macOS` `Camera` `Dashboards`
+`ESP8266` `ESP12F` `ST7789` `WiFi` `Arduino` `macOS` `weather station` `system monitoring` `notifications` `dashboards` `TFT display` `IoT`
 
-Custom firmware for the ESP12F-based smart WiFi weather station with a 240x240 ST7789 TFT display, commonly available on online marketplaces such as Amazon, AliExpress, and similar shops.
+Custom firmware for the `GeekMagic SmallTV-Ultra`, an ESP12F-based mini desktop WiFi weather station with a 240x240 ST7789 TFT display.
+
+On marketplaces such as Amazon, AliExpress, and similar shops it is commonly listed as: `Super Cool Mini WiFi Desktop Weather Digital Clock Station with IPS LCD Screen Gadget for Decoration`.
 
 ## Sketch Overview
 
