@@ -2,7 +2,7 @@
 
 `ESP8266` `ST7789` `WiFi` `Arduino` `macOS` `Camera` `Dashboards`
 
-Custom firmware for the cheap ESP12F-based smart WiFi weather station (~$20 on Amazon) with a 240x240 ST7789 TFT display.
+Custom firmware for the ESP12F-based smart WiFi weather station with a 240x240 ST7789 TFT display, commonly available on online marketplaces such as Amazon, AliExpress, and similar shops.
 
 ## Sketch Overview
 
