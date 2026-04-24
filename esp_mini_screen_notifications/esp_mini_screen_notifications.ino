@@ -2,11 +2,14 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
 #include <EEPROM.h>
+#include <FS.h>
+#include <LittleFS.h>
 #include <TFT_eSPI.h>
 #include <WiFiClientSecureBearSSL.h>
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifndef TFT_BL
 #define TFT_BL 5
@@ -31,8 +34,10 @@
 
 // --- Notification payload sizing ---
 #define APP_TEXT_LEN     24
+#define BUNDLE_ID_LEN    64
 #define SENDER_TEXT_LEN  32
 #define TITLE_TEXT_LEN   64
+#define SUBTITLE_TEXT_LEN 64
 #define BODY_TEXT_LEN    224
 #define UPDATED_AT_LEN   32
 #define MAX_WRAP_LINES   8
@@ -49,7 +54,9 @@
 #define NOTIFICATION_TOTAL_MS   5000UL
 #define NOTIFICATION_ENTER_MS   800UL
 #define NOTIFICATION_EXIT_MS    800UL
-#define NOTIFICATION_VISIBLE_MS (NOTIFICATION_TOTAL_MS - NOTIFICATION_ENTER_MS - NOTIFICATION_EXIT_MS)
+#define NOTIFICATION_DEFAULT_VISIBLE_MS (NOTIFICATION_TOTAL_MS - NOTIFICATION_ENTER_MS - NOTIFICATION_EXIT_MS)
+#define NOTIFICATION_MIN_VISIBLE_MS 1000UL
+#define NOTIFICATION_MAX_VISIBLE_MS 30000UL
 #define NOTIFICATION_FRAME_MS   33UL
 
 #define NOTIFICATION_PHASE_IDLE     0
@@ -83,6 +90,7 @@
 #define WEATHER_FETCH_TIMEOUT_MS    12000
 #define IDLE_CLOCK_REFRESH_MS       250UL
 #define IDLE_INFO_ROTATE_MS         7000UL
+#define CLOCK_SMOOTH_MAIN_FONT      "ClockMain48"
 
 #define WEATHER_CITY_LEN            48
 #define WEATHER_TOKEN_LEN           48
@@ -135,9 +143,13 @@ const uint16_t COLOR_IDLE_DIVIDER = 0x31A6;
 
 struct NotificationState {
   char app[APP_TEXT_LEN];
+  char bundleId[BUNDLE_ID_LEN];
   char sender[SENDER_TEXT_LEN];
   char title[TITLE_TEXT_LEN];
+  char subtitle[SUBTITLE_TEXT_LEN];
   char body[BODY_TEXT_LEN];
+  uint16_t accentColor;
+  uint16_t foregroundColor;
 };
 
 struct BacklightSettings {
@@ -198,14 +210,16 @@ TFT_eSprite cardSliceSprite = TFT_eSprite(&tft);
 ESP8266WebServer server(80);
 
 String scannedNetworks = "";
+bool smoothFontFsReady = false;
+bool clockSmoothFontReady = false;
 
-NotificationState currentNotification = {"", "", "", ""};
+NotificationState currentNotification = {"", "", "", "", "", "", COLOR_DEFAULT, COLOR_TEXT};
 char updatedAt[UPDATED_AT_LEN] = "";
 bool hasNotification = false;
 unsigned long updateCounter = 0;
 bool dashboardCacheValid = false;
 bool drawnHasNotification = false;
-NotificationState drawnNotification = {"", "", "", ""};
+NotificationState drawnNotification = {"", "", "", "", "", "", COLOR_DEFAULT, COLOR_TEXT};
 char drawnUpdatedAt[UPDATED_AT_LEN] = "";
 bool cardSliceSpriteReady = false;
 int cardSliceSpriteHeight = 0;
@@ -216,6 +230,7 @@ int animationTargetCardX = DASHBOARD_CARD_X;
 uint8_t notificationPhase = NOTIFICATION_PHASE_IDLE;
 unsigned long notificationPhaseStartedAt = 0;
 unsigned long notificationVisibleUntilMs = 0;
+unsigned long currentNotificationVisibleMs = NOTIFICATION_DEFAULT_VISIBLE_MS;
 unsigned long lastNotificationFrameMs = 0;
 ClockSettings clockSettings = {
   CLOCK_SETTINGS_MAGIC,
@@ -268,6 +283,7 @@ void clearNotification();
 void refreshWeather(bool force = false);
 void drawIdleBackgroundRegion(int startY, int height);
 bool idleWeatherIsReady();
+void initSmoothFonts();
 
 template <typename Surface>
 void drawIdleClockPanelOn(Surface& surface, int offsetY);
@@ -714,6 +730,7 @@ void resetNotificationAnimation() {
   notificationPhase = NOTIFICATION_PHASE_IDLE;
   notificationPhaseStartedAt = 0;
   notificationVisibleUntilMs = 0;
+  currentNotificationVisibleMs = NOTIFICATION_DEFAULT_VISIBLE_MS;
   lastNotificationFrameMs = 0;
 }
 
@@ -756,7 +773,7 @@ void updateNotificationAnimation(bool force = false) {
     if (elapsed >= NOTIFICATION_ENTER_MS) {
       currentCardX = DASHBOARD_CARD_X;
       notificationPhase = NOTIFICATION_PHASE_VISIBLE;
-      notificationVisibleUntilMs = now + NOTIFICATION_VISIBLE_MS;
+      notificationVisibleUntilMs = now + currentNotificationVisibleMs;
     } else {
       currentCardX = interpolateInt(animationStartCardX, animationTargetCardX, (float)elapsed / (float)NOTIFICATION_ENTER_MS);
     }
@@ -1224,9 +1241,13 @@ void refreshWeather(bool force) {
 
 void clearNotification() {
   currentNotification.app[0] = 0;
+  currentNotification.bundleId[0] = 0;
   currentNotification.sender[0] = 0;
   currentNotification.title[0] = 0;
+  currentNotification.subtitle[0] = 0;
   currentNotification.body[0] = 0;
+  currentNotification.accentColor = COLOR_DEFAULT;
+  currentNotification.foregroundColor = COLOR_TEXT;
   updatedAt[0] = 0;
   hasNotification = false;
 }
@@ -1309,13 +1330,29 @@ String buildStateJson() {
   json += String(updateCounter);
   json += ",\"app\":\"";
   json += jsonEscape(currentNotification.app);
+  json += "\",\"bundleId\":\"";
+  json += jsonEscape(currentNotification.bundleId);
   json += "\",\"sender\":\"";
   json += jsonEscape(currentNotification.sender);
   json += "\",\"title\":\"";
   json += jsonEscape(currentNotification.title);
+  json += "\",\"subtitle\":\"";
+  json += jsonEscape(currentNotification.subtitle);
   json += "\",\"body\":\"";
   json += jsonEscape(currentNotification.body);
-  json += "\",\"brightnessMode\":\"";
+  json += "\",\"accentColor\":\"#";
+  if (currentNotification.accentColor < 0x1000) json += "0";
+  if (currentNotification.accentColor < 0x0100) json += "0";
+  if (currentNotification.accentColor < 0x0010) json += "0";
+  json += String(currentNotification.accentColor, HEX);
+  json += "\",\"foregroundColor\":\"#";
+  if (currentNotification.foregroundColor < 0x1000) json += "0";
+  if (currentNotification.foregroundColor < 0x0100) json += "0";
+  if (currentNotification.foregroundColor < 0x0010) json += "0";
+  json += String(currentNotification.foregroundColor, HEX);
+  json += "\",\"durationMs\":";
+  json += String(currentNotificationVisibleMs);
+  json += ",\"brightnessMode\":\"";
   json += (backlightSettings.mode == BRIGHTNESS_MODE_SCHEDULE ? "schedule" : "manual");
   json += "\",\"manualBrightness\":";
   json += String(backlightSettings.manualBrightness);
@@ -1535,9 +1572,13 @@ void invalidateDashboardCache() {
   drawnIdleInfoLine[0] = 0;
   drawnIdleWeatherKey[0] = 0;
   drawnNotification.app[0] = 0;
+  drawnNotification.bundleId[0] = 0;
   drawnNotification.sender[0] = 0;
   drawnNotification.title[0] = 0;
+  drawnNotification.subtitle[0] = 0;
   drawnNotification.body[0] = 0;
+  drawnNotification.accentColor = COLOR_DEFAULT;
+  drawnNotification.foregroundColor = COLOR_TEXT;
   drawnUpdatedAt[0] = 0;
 }
 
@@ -1546,9 +1587,13 @@ void syncDashboardCache() {
   drawnHasNotification = hasNotification;
   drawnCardX = currentCardX;
   copyToBuffer(drawnNotification.app, sizeof(drawnNotification.app), String(currentNotification.app));
+  copyToBuffer(drawnNotification.bundleId, sizeof(drawnNotification.bundleId), String(currentNotification.bundleId));
   copyToBuffer(drawnNotification.sender, sizeof(drawnNotification.sender), String(currentNotification.sender));
   copyToBuffer(drawnNotification.title, sizeof(drawnNotification.title), String(currentNotification.title));
+  copyToBuffer(drawnNotification.subtitle, sizeof(drawnNotification.subtitle), String(currentNotification.subtitle));
   copyToBuffer(drawnNotification.body, sizeof(drawnNotification.body), String(currentNotification.body));
+  drawnNotification.accentColor = currentNotification.accentColor;
+  drawnNotification.foregroundColor = currentNotification.foregroundColor;
   copyToBuffer(drawnUpdatedAt, sizeof(drawnUpdatedAt), String(updatedAt));
 }
 
@@ -1578,9 +1623,13 @@ bool notificationCardChanged() {
     return false;
 
   return strcmp(drawnNotification.app, currentNotification.app) != 0 ||
+         strcmp(drawnNotification.bundleId, currentNotification.bundleId) != 0 ||
          strcmp(drawnNotification.sender, currentNotification.sender) != 0 ||
          strcmp(drawnNotification.title, currentNotification.title) != 0 ||
+         strcmp(drawnNotification.subtitle, currentNotification.subtitle) != 0 ||
          strcmp(drawnNotification.body, currentNotification.body) != 0 ||
+         drawnNotification.accentColor != currentNotification.accentColor ||
+         drawnNotification.foregroundColor != currentNotification.foregroundColor ||
          strcmp(drawnUpdatedAt, updatedAt) != 0 ||
          drawnCardX != currentCardX;
 }
@@ -1653,7 +1702,8 @@ void drawNotificationCardOn(Surface& surface, int cardX, int cardY) {
     return;
 
   surface.setTextWrap(false, false);
-  uint16_t accent = accentForApp(currentNotification.app);
+  uint16_t accent = currentNotification.accentColor ? currentNotification.accentColor : accentForApp(currentNotification.app);
+  uint16_t foreground = currentNotification.foregroundColor ? currentNotification.foregroundColor : COLOR_TEXT;
 
   surface.fillRoundRect(cardX, cardY, cardW, cardH, 14, COLOR_PANEL);
   surface.drawRoundRect(cardX, cardY, cardW, cardH, 14, COLOR_BORDER);
@@ -1689,7 +1739,8 @@ void drawNotificationCardOn(Surface& surface, int cardX, int cardY) {
     surface.print(stamp);
   }
 
-  String sender = currentNotification.sender[0] ? fitTextOn(surface, currentNotification.sender, cardW - 52) : String("Incoming notification");
+  String senderSource = currentNotification.sender[0] ? String(currentNotification.sender) : String(currentNotification.subtitle);
+  String sender = senderSource.length() > 0 ? fitTextOn(surface, senderSource.c_str(), cardW - 52) : String("Incoming notification");
   surface.setTextColor(COLOR_MUTED, COLOR_PANEL);
   surface.setCursor(cardX + 40, cardY + 22);
   surface.print(sender);
@@ -1699,7 +1750,7 @@ void drawNotificationCardOn(Surface& surface, int cardX, int cardY) {
   int textY = cardY + 50;
 
   surface.setTextSize(2);
-  surface.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  surface.setTextColor(foreground, COLOR_PANEL);
   String titleLines[2];
   int titleCount = wrapTextLinesOn(surface, currentNotification.title[0] ? currentNotification.title : "Notification", titleLines, 2, bodyWidth);
   for (int i = 0; i < titleCount; i++) {
@@ -1711,7 +1762,7 @@ void drawNotificationCardOn(Surface& surface, int cardX, int cardY) {
   textY += 4;
 
   surface.setTextSize(1);
-  surface.setTextColor(COLOR_TEXT, COLOR_PANEL);
+  surface.setTextColor(foreground, COLOR_PANEL);
   String bodyLines[MAX_WRAP_LINES];
   int bodyCount = wrapTextLinesOn(surface, currentNotification.body[0] ? currentNotification.body : "No message body.", bodyLines, MAX_WRAP_LINES, bodyWidth);
   for (int i = 0; i < bodyCount; i++) {
@@ -1787,6 +1838,16 @@ void buildIdleWeatherKey(char* out, size_t outSize) {
 
 bool idleWeatherIsReady() {
   return weatherSettings.enabled && weatherLocationConfigured() && weatherState.valid;
+}
+
+void initSmoothFonts() {
+#ifdef SMOOTH_FONT
+  smoothFontFsReady = LittleFS.begin();
+  clockSmoothFontReady = smoothFontFsReady && LittleFS.exists("/" CLOCK_SMOOTH_MAIN_FONT ".vlw");
+#else
+  smoothFontFsReady = false;
+  clockSmoothFontReady = false;
+#endif
 }
 
 bool idleVisualUsesNightPalette() {
@@ -2066,6 +2127,85 @@ void drawIdleForecastChipOn(Surface& surface, int x, int y, int w, int h, const 
   surface.print(minText);
 }
 
+bool drawIdleSmoothClockTimeOn(TFT_eSPI& surface, int offsetY, const String& hoursText, const String& minutesText, const char* secondsText, const char* suffixText) {
+#ifdef SMOOTH_FONT
+  if (!clockSmoothFontReady)
+    return false;
+
+  const int gapLarge = 1;
+  const int gapSmall = 1;
+  const int timeBottom = offsetY + 114;
+  const int smoothTop = timeBottom - 48;
+  const int secondsTop = timeBottom - 24;
+  const int dotTop = timeBottom - 16;
+
+  surface.setTextSize(2);
+  int dotWidth = surface.textWidth(".");
+  surface.setTextSize(3);
+  int secondsWidth = surface.textWidth(secondsText);
+
+  surface.setTextSize(1);
+  surface.setTextDatum(TL_DATUM);
+  surface.loadFont(CLOCK_SMOOTH_MAIN_FONT, LittleFS);
+  int hoursWidth = surface.textWidth(hoursText);
+  int colonWidth = surface.textWidth(":");
+  int minutesWidth = surface.textWidth(minutesText);
+  int timeWidth = hoursWidth + colonWidth + minutesWidth + dotWidth + secondsWidth + gapLarge * 2 + gapSmall * 2;
+  int hoursX = (DISPLAY_SIZE - timeWidth) / 2;
+  if (hoursX < 8)
+    hoursX = 8;
+
+  surface.setTextColor(COLOR_IDLE_HOURS, COLOR_IDLE_BG);
+  surface.drawString(hoursText, hoursX, smoothTop);
+  int colonX = hoursX + hoursWidth + gapLarge;
+  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
+  surface.drawString(":", colonX, smoothTop);
+  int minutesX = colonX + colonWidth + gapLarge;
+  surface.drawString(minutesText, minutesX, smoothTop);
+  surface.unloadFont();
+
+  int dotX = minutesX + minutesWidth + gapSmall;
+  surface.setTextSize(2);
+  surface.setTextColor(COLOR_IDLE_SECONDS, COLOR_IDLE_BG);
+  surface.setCursor(dotX, dotTop);
+  surface.print(".");
+
+  int secondsX = dotX + dotWidth + gapSmall;
+  surface.setTextSize(3);
+  surface.setCursor(secondsX, secondsTop);
+  surface.print(secondsText);
+
+  if (suffixText[0]) {
+    surface.setTextSize(2);
+    surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
+    int suffixWidth = surface.textWidth(suffixText);
+    int suffixX = secondsX + (secondsWidth / 2) - (suffixWidth / 2);
+    surface.setCursor(suffixX, offsetY + 72);
+    surface.print(suffixText);
+  }
+
+  return true;
+#else
+  (void)surface;
+  (void)offsetY;
+  (void)hoursText;
+  (void)minutesText;
+  (void)secondsText;
+  (void)suffixText;
+  return false;
+#endif
+}
+
+bool drawIdleSmoothClockTimeOn(TFT_eSprite& surface, int offsetY, const String& hoursText, const String& minutesText, const char* secondsText, const char* suffixText) {
+  (void)surface;
+  (void)offsetY;
+  (void)hoursText;
+  (void)minutesText;
+  (void)secondsText;
+  (void)suffixText;
+  return false;
+}
+
 template <typename Surface>
 void drawIdleClockPanelOn(Surface& surface, int offsetY) {
   char mainTime[8];
@@ -2095,63 +2235,65 @@ void drawIdleClockPanelOn(Surface& surface, int offsetY) {
   surface.setCursor(14, offsetY + 34);
   surface.print(fitTextOn(surface, infoLine.c_str(), 122));
 
-  surface.setTextSize(5);
-  int hoursWidth = surface.textWidth(hoursText);
-  int minutesWidth = surface.textWidth(minutesText);
-  surface.setTextSize(5);
-  int colonWidth = surface.textWidth(":");
-  surface.setTextSize(2);
-  int dotWidth = surface.textWidth(".");
-  surface.setTextSize(3);
-  int secondsWidth = surface.textWidth(secondsText);
-
-  const int gapLarge = 0;
-  const int gapSmall = 1;
-  int timeWidth = hoursWidth + colonWidth + minutesWidth + dotWidth + secondsWidth + gapLarge * 2 + gapSmall * 2;
-  int hoursX = (DISPLAY_SIZE - timeWidth) / 2;
-  if (hoursX < 8)
-    hoursX = 8;
-  const int timeBottom = offsetY + 114;
-  const int digitTop = timeBottom - 40;
-  const int secondsTop = timeBottom - 24;
-  const int dotTop = timeBottom - 16;
-
-  surface.setTextSize(5);
-  surface.setTextColor(COLOR_IDLE_HOURS, COLOR_IDLE_BG);
-  surface.setCursor(hoursX, digitTop);
-  surface.print(hoursText);
-
-  surface.setTextSize(5);
-  int colonX = hoursX + hoursWidth + gapLarge;
-  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
-  surface.setCursor(colonX, digitTop);
-  surface.print(":");
-
-  surface.setTextSize(5);
-  surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
-  int minutesX = colonX + colonWidth + gapLarge;
-  surface.setCursor(minutesX, digitTop);
-  surface.print(minutesText);
-
-  surface.setTextSize(3);
-  surface.setTextColor(COLOR_IDLE_SECONDS, COLOR_IDLE_BG);
-  int dotX = minutesX + minutesWidth + gapSmall;
-  surface.setTextSize(2);
-  surface.setCursor(dotX, dotTop);
-  surface.print(".");
-
-  surface.setTextSize(3);
-  int secondsX = dotX + dotWidth + gapSmall;
-  surface.setCursor(secondsX, secondsTop);
-  surface.print(secondsText);
-
-  if (suffixText[0]) {
+  if (!drawIdleSmoothClockTimeOn(surface, offsetY, hoursText, minutesText, secondsText, suffixText)) {
+    surface.setTextSize(5);
+    int hoursWidth = surface.textWidth(hoursText);
+    int minutesWidth = surface.textWidth(minutesText);
+    surface.setTextSize(5);
+    int colonWidth = surface.textWidth(":");
     surface.setTextSize(2);
-    surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
-    int suffixWidth = surface.textWidth(suffixText);
-    int suffixX = secondsX + (secondsWidth / 2) - (suffixWidth / 2);
-    surface.setCursor(suffixX, offsetY + 72);
-    surface.print(suffixText);
+    int dotWidth = surface.textWidth(".");
+    surface.setTextSize(3);
+    int secondsWidth = surface.textWidth(secondsText);
+
+    const int gapLarge = 0;
+    const int gapSmall = 1;
+    int timeWidth = hoursWidth + colonWidth + minutesWidth + dotWidth + secondsWidth + gapLarge * 2 + gapSmall * 2;
+    int hoursX = (DISPLAY_SIZE - timeWidth) / 2;
+    if (hoursX < 8)
+      hoursX = 8;
+    const int timeBottom = offsetY + 114;
+    const int digitTop = timeBottom - 40;
+    const int secondsTop = timeBottom - 24;
+    const int dotTop = timeBottom - 16;
+
+    surface.setTextSize(5);
+    surface.setTextColor(COLOR_IDLE_HOURS, COLOR_IDLE_BG);
+    surface.setCursor(hoursX, digitTop);
+    surface.print(hoursText);
+
+    surface.setTextSize(5);
+    int colonX = hoursX + hoursWidth + gapLarge;
+    surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
+    surface.setCursor(colonX, digitTop);
+    surface.print(":");
+
+    surface.setTextSize(5);
+    surface.setTextColor(COLOR_IDLE_MINUTES, COLOR_IDLE_BG);
+    int minutesX = colonX + colonWidth + gapLarge;
+    surface.setCursor(minutesX, digitTop);
+    surface.print(minutesText);
+
+    surface.setTextSize(3);
+    surface.setTextColor(COLOR_IDLE_SECONDS, COLOR_IDLE_BG);
+    int dotX = minutesX + minutesWidth + gapSmall;
+    surface.setTextSize(2);
+    surface.setCursor(dotX, dotTop);
+    surface.print(".");
+
+    surface.setTextSize(3);
+    int secondsX = dotX + dotWidth + gapSmall;
+    surface.setCursor(secondsX, secondsTop);
+    surface.print(secondsText);
+
+    if (suffixText[0]) {
+      surface.setTextSize(2);
+      surface.setTextColor(COLOR_MUTED, COLOR_IDLE_BG);
+      int suffixWidth = surface.textWidth(suffixText);
+      int suffixX = secondsX + (secondsWidth / 2) - (suffixWidth / 2);
+      surface.setCursor(suffixX, offsetY + 72);
+      surface.print(suffixText);
+    }
   }
 
   surface.setTextSize(1);
@@ -2359,22 +2501,39 @@ pre{background:#0b1018;border:1px solid #263345;border-radius:12px;padding:12px;
 <div class='panel'>
   <h2>Notifications</h2>
   <p class='sub'>Use this page to test <code>POST /notify</code>. The ESP shows the latest notification only, so each upload replaces the current card. Backlight settings are saved on the device.</p>
-  <form id='form'>
-    <label>App
-      <input name='app' placeholder='Telegram'>
-    </label>
-    <label>Sender
-      <input name='sender' placeholder='Alice'>
-    </label>
-    <label>Title
-      <input name='title' placeholder='New message'>
-    </label>
-    <label>Body
-      <textarea name='body' placeholder='Hey, can you check the new layout on the device?'></textarea>
-    </label>
-    <label>Updated At
-      <input name='updatedAt' placeholder='10:42:15'>
-    </label>
+	<form id='form'>
+	    <label>App
+	      <input name='app' placeholder='Telegram'>
+	    </label>
+	    <label>Bundle ID
+	      <input name='bundleId' placeholder='com.tdesktop.telegram'>
+	    </label>
+	    <label>Sender
+	      <input name='sender' placeholder='Alice'>
+	    </label>
+	    <label>Title
+	      <input name='title' placeholder='New message'>
+	    </label>
+	    <label>Subtitle
+	      <input name='subtitle' placeholder='Chat or channel'>
+	    </label>
+	    <label>Body
+	      <textarea name='body' placeholder='Hey, can you check the new layout on the device?'></textarea>
+	    </label>
+	    <label>Time
+	      <input name='updatedAt' placeholder='10:42:15'>
+	    </label>
+	    <div class='grid'>
+	      <label>Accent
+	        <input name='accent' type='color' value='#2AABEE'>
+	      </label>
+	      <label>Text
+	        <input name='foreground' type='color' value='#FFFFFF'>
+	      </label>
+	    </div>
+	    <label>Visible seconds
+	      <input name='durationSeconds' type='number' min='1' max='30' step='1' value='3'>
+	    </label>
 
     <div class='actions'>
       <button type='button' class='alt' onclick='loadTelegramDemo()'>Telegram demo</button>
@@ -2501,13 +2660,16 @@ function setValue(name, value){
   setFormValue(form, name, value);
 }
 
-function syncForm(state){
-  setValue('app', state && state.app ? state.app : '');
-  setValue('sender', state && state.sender ? state.sender : '');
-  setValue('title', state && state.title ? state.title : '');
-  setValue('body', state && state.body ? state.body : '');
-  setValue('updatedAt', state && state.updatedAt ? state.updatedAt : '');
-}
+	function syncForm(state){
+	  setValue('app', state && state.app ? state.app : '');
+	  setValue('bundleId', state && state.bundleId ? state.bundleId : '');
+	  setValue('sender', state && state.sender ? state.sender : '');
+	  setValue('title', state && state.title ? state.title : '');
+	  setValue('subtitle', state && state.subtitle ? state.subtitle : '');
+	  setValue('body', state && state.body ? state.body : '');
+	  setValue('updatedAt', state && state.updatedAt ? state.updatedAt : '');
+	  setValue('durationSeconds', state && Number.isFinite(state.durationMs) ? Math.round(state.durationMs / 1000) : 3);
+	}
 
 function updateBrightnessLabels(){
   document.getElementById('manualBrightnessValue').textContent = String(brightnessForm.elements.namedItem('manualBrightness').value) + '%';
@@ -2561,22 +2723,32 @@ function syncClockWeatherForm(state){
 }
 
 function loadTelegramDemo(){
-  const stamp = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  setValue('app', 'Telegram');
-  setValue('sender', 'Alice');
-  setValue('title', 'New message');
-  setValue('body', 'Hey, the ESP notification sketch is up. Check the device and tell me if the text card feels balanced.');
-  setValue('updatedAt', stamp);
-}
+	  const stamp = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+	  setValue('app', 'Telegram');
+	  setValue('bundleId', 'com.tdesktop.telegram');
+	  setValue('sender', 'Alice');
+	  setValue('title', 'New message');
+	  setValue('subtitle', 'Friends');
+	  setValue('body', 'Hey, the ESP notification sketch is up. Check the device and tell me if the text card feels balanced.');
+	  setValue('updatedAt', stamp);
+	  setValue('accent', '#2AABEE');
+	  setValue('foreground', '#FFFFFF');
+	  setValue('durationSeconds', '5');
+	}
 
 function loadMailDemo(){
-  const stamp = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  setValue('app', 'Mail');
-  setValue('sender', 'Build Bot');
-  setValue('title', 'CI finished successfully');
-  setValue('body', 'The latest pipeline passed. Release artifacts are ready for review.');
-  setValue('updatedAt', stamp);
-}
+	  const stamp = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+	  setValue('app', 'Mail');
+	  setValue('bundleId', 'com.apple.mail');
+	  setValue('sender', 'Build Bot');
+	  setValue('title', 'CI finished successfully');
+	  setValue('subtitle', 'Release pipeline');
+	  setValue('body', 'The latest pipeline passed. Release artifacts are ready for review.');
+	  setValue('updatedAt', stamp);
+	  setValue('accent', '#FFB020');
+	  setValue('foreground', '#FFFFFF');
+	  setValue('durationSeconds', '8');
+	}
 
 async function refreshState(){
   try{
@@ -2692,24 +2864,41 @@ clockWeatherForm.addEventListener('submit', async (event) => {
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  const params = new URLSearchParams();
-  for (const [key, value] of new FormData(form).entries()) {
-    const text = String(value).trim();
-    if (text) params.append(key, text);
-  }
-
-  if (!params.get('title') && !params.get('body')) {
-    statusEl.textContent = 'Title or body is required';
-    return;
-  }
-
-  try {
-    statusEl.textContent = 'Uploading...';
-    const resp = await fetch('/notify', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-      body: params.toString()
-    });
+	  const values = {};
+	  for (const [key, value] of new FormData(form).entries()) values[key] = String(value).trim();
+	
+	  if (!values.title && !values.body) {
+	    statusEl.textContent = 'Title or body is required';
+	    return;
+	  }
+	
+	  const payload = {
+	    version: 2,
+	    source: {
+	      appName: values.app || 'App',
+	      bundleId: values.bundleId || '',
+	      sender: values.sender || ''
+	    },
+	    content: {
+	      title: values.title || '',
+	      subtitle: values.subtitle || '',
+	      body: values.body || '',
+	      time: values.updatedAt || ''
+	    },
+	    style: {
+	      accent: values.accent || '#55AAFF',
+	      foreground: values.foreground || '#FFFFFF',
+	      durationMs: Math.max(1, Math.min(30, Number(values.durationSeconds || 3))) * 1000
+	    }
+	  };
+	
+	  try {
+	    statusEl.textContent = 'Uploading...';
+	    const resp = await fetch('/notify', {
+	      method: 'POST',
+	      headers: {'Content-Type': 'application/json;charset=UTF-8'},
+	      body: JSON.stringify(payload)
+	    });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
     stateEl.textContent = JSON.stringify(data, null, 2);
@@ -2973,17 +3162,162 @@ void handleWeatherRefresh() {
   server.send(200, "application/json", buildStateJson());
 }
 
+String jsonUnescapeString(const String& encoded) {
+  String out = "";
+  out.reserve(encoded.length());
+  for (size_t i = 0; i < encoded.length(); i++) {
+    char c = encoded[i];
+    if (c != '\\' || i + 1 >= encoded.length()) {
+      out += c;
+      continue;
+    }
+
+    char esc = encoded[++i];
+    if (esc == '"' || esc == '\\' || esc == '/') {
+      out += esc;
+    } else if (esc == 'n') {
+      out += '\n';
+    } else if (esc == 'r') {
+      out += '\r';
+    } else if (esc == 't') {
+      out += '\t';
+    }
+  }
+  return out;
+}
+
+bool jsonStringValue(const String& json, const char* key, String& out) {
+  String needle = String("\"") + key + "\"";
+  int keyPos = json.indexOf(needle);
+  if (keyPos < 0)
+    return false;
+
+  int colonPos = json.indexOf(':', keyPos + needle.length());
+  if (colonPos < 0)
+    return false;
+
+  int quotePos = colonPos + 1;
+  while (quotePos < (int)json.length() && isspace((unsigned char)json[quotePos]))
+    quotePos++;
+  if (quotePos >= (int)json.length() || json[quotePos] != '"')
+    return false;
+
+  String encoded = "";
+  bool escaped = false;
+  for (int i = quotePos + 1; i < (int)json.length(); i++) {
+    char c = json[i];
+    if (escaped) {
+      encoded += '\\';
+      encoded += c;
+      escaped = false;
+      continue;
+    }
+    if (c == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (c == '"') {
+      out = jsonUnescapeString(encoded);
+      return true;
+    }
+    encoded += c;
+  }
+  return false;
+}
+
+bool jsonUnsignedLongValue(const String& json, const char* key, unsigned long& out) {
+  String needle = String("\"") + key + "\"";
+  int keyPos = json.indexOf(needle);
+  if (keyPos < 0)
+    return false;
+
+  int colonPos = json.indexOf(':', keyPos + needle.length());
+  if (colonPos < 0)
+    return false;
+
+  int valuePos = colonPos + 1;
+  while (valuePos < (int)json.length() && isspace((unsigned char)json[valuePos]))
+    valuePos++;
+
+  unsigned long value = 0;
+  bool hasDigit = false;
+  for (int i = valuePos; i < (int)json.length(); i++) {
+    char c = json[i];
+    if (c < '0' || c > '9')
+      break;
+    hasDigit = true;
+    value = value * 10UL + (unsigned long)(c - '0');
+  }
+
+  if (!hasDigit)
+    return false;
+  out = value;
+  return true;
+}
+
+int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool parseCssColor565(const String& raw, uint16_t& out) {
+  String value = raw;
+  value.trim();
+  if (value.startsWith("#"))
+    value.remove(0, 1);
+  if (value.length() != 6)
+    return false;
+
+  int digits[6];
+  for (int i = 0; i < 6; i++) {
+    digits[i] = hexNibble(value[i]);
+    if (digits[i] < 0)
+      return false;
+  }
+
+  uint8_t r = (digits[0] << 4) | digits[1];
+  uint8_t g = (digits[2] << 4) | digits[3];
+  uint8_t b = (digits[4] << 4) | digits[5];
+  out = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+  return true;
+}
+
 void handleNotifyUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
     server.send(503, "application/json", "{\"error\":\"wifi_not_connected\"}");
     return;
   }
 
-  String nextApp = server.hasArg("app") ? server.arg("app") : String("");
-  String nextSender = server.hasArg("sender") ? server.arg("sender") : String("");
-  String nextTitle = server.hasArg("title") ? server.arg("title") : String("");
-  String nextBody = server.hasArg("body") ? server.arg("body") : String("");
-  String nextUpdatedAt = server.hasArg("updatedAt") ? server.arg("updatedAt") : String("");
+  String json = server.hasArg("plain") ? server.arg("plain") : String("");
+  json.trim();
+  if (json.length() == 0 || json[0] != '{') {
+    server.send(400, "application/json", "{\"error\":\"json_body_required\"}");
+    return;
+  }
+
+  String nextApp = "";
+  String nextBundleId = "";
+  String nextSender = "";
+  String nextTitle = "";
+  String nextSubtitle = "";
+  String nextBody = "";
+  String nextUpdatedAt = "";
+  String nextAccent = "";
+  String nextForeground = "";
+  unsigned long nextDurationMs = NOTIFICATION_DEFAULT_VISIBLE_MS;
+
+  jsonStringValue(json, "appName", nextApp);
+  jsonStringValue(json, "bundleId", nextBundleId);
+  jsonStringValue(json, "sender", nextSender);
+  jsonStringValue(json, "title", nextTitle);
+  jsonStringValue(json, "subtitle", nextSubtitle);
+  jsonStringValue(json, "body", nextBody);
+  jsonStringValue(json, "time", nextUpdatedAt);
+  jsonStringValue(json, "accent", nextAccent);
+  jsonStringValue(json, "foreground", nextForeground);
+  jsonUnsignedLongValue(json, "durationMs", nextDurationMs);
 
   nextTitle.trim();
   nextBody.trim();
@@ -2995,11 +3329,31 @@ void handleNotifyUpdate() {
   if (nextApp.length() == 0)
     nextApp = "App";
 
+  uint16_t nextAccentColor = accentForApp(nextApp.c_str());
+  uint16_t nextForegroundColor = COLOR_TEXT;
+  if (nextAccent.length() > 0 && !parseCssColor565(nextAccent, nextAccentColor)) {
+    server.send(400, "application/json", "{\"error\":\"invalid_accent_color\"}");
+    return;
+  }
+  if (nextForeground.length() > 0 && !parseCssColor565(nextForeground, nextForegroundColor)) {
+    server.send(400, "application/json", "{\"error\":\"invalid_foreground_color\"}");
+    return;
+  }
+  if (nextDurationMs < NOTIFICATION_MIN_VISIBLE_MS)
+    nextDurationMs = NOTIFICATION_MIN_VISIBLE_MS;
+  if (nextDurationMs > NOTIFICATION_MAX_VISIBLE_MS)
+    nextDurationMs = NOTIFICATION_MAX_VISIBLE_MS;
+
   copyToBuffer(currentNotification.app, sizeof(currentNotification.app), nextApp);
+  copyToBuffer(currentNotification.bundleId, sizeof(currentNotification.bundleId), nextBundleId);
   copyToBuffer(currentNotification.sender, sizeof(currentNotification.sender), nextSender);
   copyToBuffer(currentNotification.title, sizeof(currentNotification.title), nextTitle);
+  copyToBuffer(currentNotification.subtitle, sizeof(currentNotification.subtitle), nextSubtitle);
   copyToBuffer(currentNotification.body, sizeof(currentNotification.body), nextBody);
   copyToBuffer(updatedAt, sizeof(updatedAt), nextUpdatedAt);
+  currentNotification.accentColor = nextAccentColor;
+  currentNotification.foregroundColor = nextForegroundColor;
+  currentNotificationVisibleMs = nextDurationMs;
 
   hasNotification = true;
   updateCounter++;
@@ -3098,6 +3452,7 @@ void setup() {
 
   tft.init();
   tft.setRotation(0);
+  initSmoothFonts();
   clearNotification();
   resetNotificationAnimation();
   resetWeatherRuntime(weatherSettings.enabled ? "Waiting for weather sync" : "Weather disabled");

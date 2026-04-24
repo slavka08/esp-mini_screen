@@ -18,5 +18,6 @@
 #define TFT_BACKLIGHT_ON LOW
 
 #define LOAD_GLCD
+#define SMOOTH_FONT
 
 #define SPI_FREQUENCY 20000000

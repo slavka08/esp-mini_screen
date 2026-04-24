@@ -30,7 +30,7 @@ Compact dashboard for daily/weekly `Codex` and `Claude` limits, updated over HTT
 
 Notification overlay sketch with an idle `clock + weather` dashboard underneath, plus slide-in / slide-out app cards over HTTP.
 
-Currently `work in progress`: the device-side sketch is usable, but there is no companion desktop/mobile app yet.
+Currently `work in progress`: the device-side sketch is usable, and a macOS `ESPNotifier` menu-bar companion app is included for Notification Center forwarding.
 
 <img src="esp_mini_screen_notifications/media/notifications_flow.gif" alt="Notifications sketch animation preview" width="420">
 
@@ -290,14 +290,16 @@ Shows the latest notification from an app on the TFT as a compact card with:
 - app name
 - sender/source
 - title
+- optional subtitle/chat/channel
 - multi-line body text
 - optional timestamp text
+- per-notification accent and text color sent by the companion app
 - auto-hide after about 10 seconds with slide-in / slide-out animation
 - idle dashboard with internet-synced clock, seconds, optional 12h/24h mode, and weather
 - current temperature and humidity plus a compact 2-day forecast
 - web-configurable backlight brightness with manual and day/night scheduled modes
 
-Status: this sketch is still in active development. The firmware and test sender are here already, but there is no polished companion app yet for capturing and forwarding real system notifications automatically.
+Status: this sketch is still in active development. The firmware, test sender, and macOS `ESPNotifier` companion app are included. The companion app currently has the richest parser for Telegram Desktop; other apps can still be forwarded with per-app name and color settings.
 
 Animation preview:
 
@@ -309,7 +311,7 @@ On-device stages:
 |---|---|---|
 | ![Idle stage](esp_mini_screen_notifications/media/notifications_idle_stage.jpg) | ![Slide-in stage](esp_mini_screen_notifications/media/notifications_slide_in_stage.jpg) | ![Full card stage](esp_mini_screen_notifications/media/notifications_card_stage.jpg) |
 
-The sketch itself is generic. It does not depend on Telegram specifically; Telegram, Mail, GitHub, or any other app can feed it as long as some local helper sends `POST /notify`.
+The sketch itself is generic. It does not depend on Telegram specifically; Telegram, Mail, GitHub, or any other app can feed it as long as some local helper sends the JSON `POST /notify` payload. Telegram currently exposes the most complete parsed fields (`title`, `subtitle`, and `body`) through the macOS companion app.
 
 Built-in web interface:
 
@@ -332,7 +334,74 @@ Files:
 
 - `esp_mini_screen_notifications/esp_mini_screen_notifications.ino` - the TFT notification sketch
 - `esp_mini_screen_notifications/tools/send_test_notification.py` - small local helper for test notifications and quick demos
+- `esp_mini_screen_notifications/tools/ESPNotifier/` - macOS menu-bar app that reads Notification Center and forwards selected apps
 - `esp_mini_screen_notifications/media/` - on-device screenshots and animation preview used in this README
+
+macOS companion app:
+
+`ESPNotifier` is a Swift Package menu-bar app. It reads the local macOS Notification Center database, lets you select apps to forward, and sends JSON `POST /notify` payloads to the ESP device.
+
+What it does:
+
+- Runs as a menu-bar app without a Dock icon
+- Polls the macOS Notification Center database for newly delivered notifications
+- Lets you choose which apps are forwarded to the ESP screen
+- Stores the device URL, selected apps, poll interval, and launch-at-login preference in macOS user defaults
+- Provides per-app presentation settings: display name, accent color, text color, and visible duration on the ESP screen
+- Supports a Telegram-specific title split: `Sender -> Chat` style titles can be shown as a sender/title plus subtitle/chat line
+- Sends a semantic JSON payload to the device; the ESP firmware still owns the final card layout and animation
+
+Current parsing support:
+
+- Telegram Desktop exposes `title`, `subtitle`, and `body` reliably in the payloads seen so far
+- Other apps can be selected and styled, but the exact available text fields depend on how macOS stores that app's notification payload
+- The app logs parsed database records and outgoing JSON payloads when run directly from the terminal
+
+Build and run from the repository root:
+
+```bash
+cd esp_mini_screen_notifications/tools/ESPNotifier
+make build
+open ESPNotifier.app
+```
+
+For iterative debugging with terminal logs:
+
+```bash
+cd esp_mini_screen_notifications/tools/ESPNotifier
+make build
+ESPNotifier.app/Contents/MacOS/ESPNotifier
+```
+
+Optional install to `~/Applications`:
+
+```bash
+cd esp_mini_screen_notifications/tools/ESPNotifier
+make install
+open "$HOME/Applications/ESPNotifier.app"
+```
+
+Requirements:
+
+- macOS 13+
+- Xcode command line tools / Swift toolchain (`xcode-select --install` if `swift` is missing)
+- Full Disk Access for `ESPNotifier.app`; macOS applies this only after the app restarts
+
+First run checklist:
+
+1. Open `ESPNotifier.app`
+2. Set the device URL, for example `http://192.168.1.69`
+3. Grant Full Disk Access in System Settings, then quit and reopen the app
+4. Press `Refresh`, select monitored apps, and adjust per-app display name, colors, and visible duration
+5. Use `Send Test Notification` to verify the ESP receives the JSON payload
+
+Optional smooth clock font:
+
+- The notifications sketch can render the main `HH:MM` clock text with a TFT_eSPI smooth anti-aliased font.
+- The repository `User_Setup.h` enables `SMOOTH_FONT`; copy it into the TFT_eSPI library setup location before compiling.
+- Generate a `ClockMain48.vlw` font with the TFT_eSPI [`Tools/Create_Smooth_Font/Create_font`](https://github.com/Bodmer/TFT_eSPI/tree/master/Tools/Create_Smooth_Font/Create_font) Processing sketch. Include at least these characters: `0123456789:`.
+- Put `ClockMain48.vlw` into `esp_mini_screen_notifications/data/`, upload the sketch LittleFS data partition so the file appears as `/ClockMain48.vlw`, and choose a board flash layout with at least 1 MB filesystem.
+- If the font file is missing or `SMOOTH_FONT` is not enabled, the firmware automatically falls back to the existing bitmap clock rendering.
 
 HTTP API:
 
@@ -342,13 +411,19 @@ HTTP API:
 - `POST /settings`
 - `POST /weather/refresh`
 
-`POST /notify` accepts `application/x-www-form-urlencoded` fields:
+`POST /notify` accepts `application/json` only:
 
-- `app`
-- `sender`
-- `title`
-- `body`
-- `updatedAt` - optional display-only timestamp text
+- `version` - currently `2`
+- `source.appName` - display name, for example `Telegram`
+- `source.bundleId` - macOS bundle identifier, for example `com.tdesktop.telegram`
+- `source.sender` - optional sender/source
+- `content.title` - short title shown prominently
+- `content.subtitle` - optional chat/channel/source line
+- `content.body` - message body
+- `content.time` - optional display-only timestamp text
+- `style.accent` - CSS hex color (`#RRGGBB`) used for the card accent
+- `style.foreground` - CSS hex color (`#RRGGBB`) used for title/body text
+- `style.durationMs` - optional visible duration in milliseconds; defaults to the firmware value and is clamped to 1..30 seconds
 
 `POST /settings` accepts:
 
@@ -369,11 +444,26 @@ Example:
 
 ```bash
 curl -X POST "http://192.168.1.50/notify" \
-  --data-urlencode "app=Telegram" \
-  --data-urlencode "sender=Alice" \
-  --data-urlencode "title=New message" \
-  --data-urlencode "body=Hey, the notification sketch is live. Can you check the device?" \
-  --data-urlencode "updatedAt=10:42:15"
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 2,
+    "source": {
+      "appName": "Telegram",
+      "bundleId": "com.tdesktop.telegram",
+      "sender": "Alice"
+    },
+    "content": {
+      "title": "Alice",
+      "subtitle": "Bob",
+      "body": "Hey, the notification sketch is live. Can you check the device?",
+      "time": "10:42"
+    },
+    "style": {
+      "accent": "#2AABEE",
+      "foreground": "#FFFFFF",
+      "durationMs": 5000
+    }
+  }'
 ```
 
 To clear the current card:
@@ -409,8 +499,8 @@ The sketch currently uses [Open-Meteo Weather Forecast API](https://open-meteo.c
 
 Current limitations:
 
-- no companion app yet for macOS/iPhone/Android; notifications are currently sent through the included test helper or your own local bridge
-- real capture from macOS Notification Center or Telegram Desktop is still a separate bridge task; this sketch already provides the device-side API and test sender for it
+- Telegram Desktop has the most complete parser in the macOS companion app today; other apps can be forwarded, but may only expose generic title/body fields depending on how macOS stores their notification payloads
+- iPhone/Android forwarding is not included
 
 ### macos_ai_limits
 
